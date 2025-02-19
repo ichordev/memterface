@@ -1,0 +1,9 @@
+{
+	"name": "memterface",
+	"description": "Generic allocator API for templated code. Intended to supersede std.experimental.allocator",
+	"authors": ["Aya Partridge"],
+	"license": "BSL-1.0",
+	
+	"targetType": "staticLibrary",
+	"targetPath": "lib",
+}
