@@ -75,7 +75,9 @@ struct Wrapped(Allocator, bool unsafe=false){
 	q{void deallocate(void[] memory) nothrow
 	in(isOwnerOf(memory)){
 		static if(is(typeof(Allocator.deallocate(void[].init)) == bool)){
-			void[] fullMemory = (() @trusted => (cast(void*)memory.ptr-magic.sizeof)[0..memory.length+magic.sizeof])();
+			ubyte[] fullMemory = (() @trusted => (cast(ubyte*)memory.ptr-magic.sizeof)[0..memory.length+magic.sizeof])();
+			fullMemory[0..magic.sizeof] = 0;
+			
 			bool success;
 			static if(hasFunctionAttributes!(Allocator.deallocate, "nothrow")){
 				success = phobosAllocator.deallocate(fullMemory);
@@ -85,7 +87,6 @@ struct Wrapped(Allocator, bool unsafe=false){
 			}else
 				static assert(0, "Cannot wrap non-`nothrow` function `deallocate` unless `unsafe` is `true`");
 			
-			*(() @trusted => cast(typeof(magic)*)fullMemory[0..magic.sizeof])() = 0U;
 			assert(success, "`deallocate` returned `false`");
 		}else static if(!unsafe)
 			static assert(0, "Cannot wrap allocator without `deallocate` unless `unsafe` is `true`");
@@ -129,7 +130,10 @@ struct Wrapped(Allocator, bool unsafe=false){
 		void reallocate(ref void[] memory, size_t newSize) nothrow
 		in(isOwnerOf(memory))
 		out(; memory.length == newSize){
-			void[] fullMemory = (() @trusted => (memory.ptr-magic.sizeof)[0..memory.length+magic.sizeof])();
+			ubyte[] fullMemoryUBytes = (() @trusted => (cast(ubyte*)memory.ptr-magic.sizeof)[0..memory.length+magic.sizeof])();
+			fullMemoryUBytes[0..magic.sizeof] = 0;
+			void[] fullMemory = fullMemoryUBytes;
+			
 			bool success;
 			static if(hasFunctionAttributes!(Allocator.reallocate, "nothrow")){
 				success = phobosAllocator.reallocate(fullMemory, newSize+magic.sizeof);
