@@ -10,7 +10,7 @@ Functions to automatically allocate memory and construct/initialise a data type 
 module memterface.ctor;
 
 import core.lifetime;
-import std.traits;
+import std.algorithm.comparison, std.traits;
 import memterface.iface;
 
 private template sizeInMemory(T){
@@ -37,31 +37,33 @@ if(isAllocator!Allocator){
 	import core.internal.lifetime: emplaceRef;
 	import core.lifetime: emplace;
 	
-	auto memory = allocator.allocate(sizeInMemory!T);
-	if(!memory.length) return null;
-	
-	auto construct(){
-		static if(is(T == class)){
-			return emplace!T(memory, forward!args);
-		}else{
-			//assume cast is safe as allocation succeeded for `sizeInMemoey!T`
-			auto ptr = (() @trusted => cast(T*)memory.ptr)();
-			emplaceRef!T(*ptr, forward!args);
-			return ptr;
+	static if(sizeInMemory!T == 0){
+		return null;
+	}else{
+		auto memory = allocator.allocate(sizeInMemory!T);
+		
+		auto construct(){
+			static if(is(T == class)){
+				return emplace!T(memory, forward!args);
+			}else{
+				//assume cast is safe as allocation succeeded for `sizeInMemory!T`
+				auto ptr = (() @trusted => cast(T*)memory.ptr)();
+				emplaceRef!T(*ptr, forward!args);
+				return ptr;
+			}
 		}
-	}
-	
-	scope(failure){
-		//`constructNew` can only be `@safe` if `emplace`/`emplaceRef` is `pure`:
-		static if(is(typeof(() pure => construct()))){
-			//deallocation here is safe because this is the only reference to this memory
-			() nothrow @trusted{ allocator.deallocate(memory); }();
-		}else{
-			allocator.deallocate(memory);
+		
+		scope(failure){
+			//`constructNew` can only be `@safe` if `emplace`/`emplaceRef` is `pure`:
+			static if(is(typeof(() pure => construct()))){
+				//deallocation here is safe because this is the only reference to this memory
+				() nothrow @trusted{ allocator.deallocate(memory); }();
+			}else{
+				allocator.deallocate(memory);
+			}
 		}
+		return construct();
 	}
-	
-	return construct();
 }
 
 private T[] newArrayImpl(T, Allocator)(auto ref Allocator allocator, size_t length){
@@ -79,24 +81,32 @@ private T[] newArrayImpl(T, Allocator)(auto ref Allocator allocator, size_t leng
 }
 
 T[] newArray(T, Allocator)(auto ref Allocator allocator, size_t length){
-	auto array = newArrayImpl!(T, Allocator)(forward!allocator, length);
-	() nothrow @nogc pure @trusted{
-		alias U = Unqual!T;
-		static if(__traits(isZeroInit, T)){ //types with only 00 bytes
-			import core.stdc.string: memset;
-			memset(array.ptr, 0x00, T.sizeof * array.length);
-		}else static if(is(U == char) || is(U == wchar)){ //types with only FF bytes
-			import core.stdc.string: memset;
-			memset(array.ptr, 0xFF, T.sizeof * array.length);
-		}else{
-			import core.stdc.string: memcpy;
-			import std.algorithm.comparison: min;
-			auto initSymbol = T.init;
-			foreach(ref item; array)
-				memcpy(&item, &initSymbol, T.sizeof);
-		}
-	}();
-	return array;
+	if(length > 0){
+		auto array = newArrayImpl!(T, Allocator)(forward!allocator, length);
+		() nothrow @nogc pure @trusted{
+			alias U = Unqual!T;
+			static if(__traits(isZeroInit, T)){ //types with only 00 bytes
+				import core.stdc.string: memset;
+				memset(&array[0], 0x00, T.sizeof * array.length);
+			}else static if(is(U == char) || is(U == wchar)){ //types with only FF bytes
+				import core.stdc.string: memset;
+				memset(&array[0], 0xFF, T.sizeof * array.length);
+			}else{
+				auto initSymbol = T.init;
+				void[] voidArray = array;
+				
+				import core.stdc.string: memcpy;
+				memcpy(&voidArray[0], &initSymbol, T.sizeof);
+				size_t alreadyCopied = T.sizeof;
+				while(alreadyCopied < voidArray.length){
+					const thisCopyLength = min(alreadyCopied, voidArray.length-alreadyCopied);
+					memcpy(&voidArray[alreadyCopied], &voidArray[0], thisCopyLength);
+					alreadyCopied += thisCopyLength;
+				}
+			}
+		}();
+		return array;
+	}else return null;
 }
 
 /**
