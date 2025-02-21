@@ -15,15 +15,16 @@ Allocates memory directly from D's built-in garbage collector using `core.memory
 */
 struct GCAllocator{
 	static void[] allocate(size_t size) nothrow pure @trusted
-	out(memory; memory.length == size) =>
+	out(memory; memory.length == size)
+	out(memory; memory is null || isOwnerOf(memory)) =>
 		GC.malloc(size)[0..size];
 	
 	static void deallocate(void[] memory) nothrow @nogc pure
 	in(isOwnerOf(memory)) =>
 		GC.free(memory.ptr);
 	
-	static bool isOwnerOf(void[] memory) nothrow @nogc pure @trusted =>
-		GC.sizeOf(memory.ptr) != 0;
+	static bool isOwnerOf(const(void)[] memory) nothrow @nogc pure @trusted =>
+		GC.sizeOf(cast(void*)memory.ptr) != 0;
 	
 	static void reallocate(ref void[] memory, size_t newSize) nothrow pure
 	in(isOwnerOf(memory))
@@ -45,4 +46,6 @@ struct GCAllocator{
 		return newSizeDelta;
 	}
 }
-static assert(isAllocator!GCAllocator && hasReallocate!GCAllocator && hasExtend!GCAllocator);
+static assert(isAllocator!GCAllocator);
+static assert(hasReallocate!GCAllocator);
+static assert(hasExtend!GCAllocator);

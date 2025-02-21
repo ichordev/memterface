@@ -7,4 +7,69 @@
 module memterface.allocator;
 
 public import
-	memterface.allocator.gc;
+	memterface.allocator.bottom,
+	memterface.allocator.gc,
+	memterface.allocator.malloc;
+
+unittest{
+	import std.meta: AliasSeq;
+	import memterface.iface, memterface.wrap;
+	
+	static foreach(Allocator; AliasSeq!(
+		GCAllocator, CAllocator, BottomAllocator,
+		(){
+			import std.experimental.allocator.building_blocks.kernighan_ritchie;
+			import std.experimental.allocator.gc_allocator: GCA = GCAllocator;
+			return Wrapped!(KRRegion!GCA)(KRRegion!GCA(128));
+		},
+	)){{
+		static if(is(Allocator)){
+			alias A = Allocator;
+			alias allocator = A;
+		}else{
+			alias A = typeof(Allocator());
+			A allocator = Allocator();
+		}
+		void[] memory = void;
+		if((){
+			static if(hasCanAllocate!A)
+				return allocator.canAllocate(0);
+			else return true;
+		}()){
+			memory = allocator.allocate(0);
+			assert(memory.length == 0);
+			if(allocator.isOwnerOf(memory))
+				allocator.deallocate(memory);
+			else assert(memory is null);
+		}
+		if((){
+			static if(hasCanAllocate!A)
+				return allocator.canAllocate(1);
+			else return true;
+		}()){
+			memory = allocator.allocate(1);
+			assert(memory.length == 1);
+			assert(allocator.isOwnerOf(memory));
+			
+			static if(hasReallocate!A){
+				if((){
+					static if(hasCanAllocate!A)
+						return allocator.canAllocate(2);
+					else return true;
+				}()){
+					allocator.reallocate(memory, 2);
+					assert(memory.length == 2);
+				}
+			}
+			static if(hasExtend!A){
+				size_t oldSize = memory.length;
+				size_t sizeDelta = allocator.extend(memory, 1);
+				assert(memory.length == oldSize + sizeDelta);
+			}
+			
+			allocator.deallocate(memory);
+			static if(!is(A == CAllocator))
+				assert(!allocator.isOwnerOf(memory));
+		}
+	}}
+}

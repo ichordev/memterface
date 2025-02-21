@@ -19,7 +19,8 @@ Warning: Does not implement `isOwnerOf` properly (it always returns `true`) due 
 struct CAllocator{
 	///Wraps a call to `core.memory.pureMalloc`
 	static void[] allocate(size_t size) nothrow @nogc pure @trusted
-	out(memory; memory.length == size){
+	out(memory; memory.length == size)
+	out(memory; memory is null || isOwnerOf(memory)){
 		auto ptr = pureMalloc(size);
 		if(ptr)
 			return ptr[0..size];
@@ -39,7 +40,7 @@ struct CAllocator{
 	implement this method incorrectly. This means that calling `deallocate` or `reallocate`
 	with `memory` may result in undefined behaviour!
 	*/
-	static bool isOwnerOf(void[] memory) nothrow @nogc pure @system =>
+	static bool isOwnerOf(const(void)[] memory) nothrow @nogc pure @system =>
 		memory.ptr !is null;
 	
 	///Wraps a call to `core.memory.pureRealloc`
@@ -53,4 +54,5 @@ struct CAllocator{
 			onOutOfMemoryError();
 	}
 }
-static assert(isAllocator!CAllocator && hasReallocate!CAllocator);
+static assert(isAllocator!CAllocator);
+static assert(hasReallocate!CAllocator);
