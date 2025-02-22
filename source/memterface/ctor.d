@@ -76,7 +76,7 @@ private T[] newArrayImpl(T, Allocator)(auto ref Allocator allocator, size_t leng
 		const size = mulu(length, T.sizeof, overflow);
 		if(overflow) onOutOfMemoryError();
 	}
-	auto memory = alloc.allocate(size);
+	auto memory = allocator.allocate(size);
 	return (() @trusted => cast(T[])memory)();
 }
 

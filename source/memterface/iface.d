@@ -211,6 +211,21 @@ if(isAllocator!A){
 		(hasFunctionAttributes!(A.canAllocate, "const") || __traits(isStaticFunction, A.canAllocate));
 }
 /**
+Returns: `true` if `Allocator`'s API functions are all `static`.
+
+Useful for discriminating between allocators that don't rely on instance data versus ones that do.
+*/
+template isGlobal(A)
+if(isAllocator!A){
+	enum isGlobal =
+		__traits(isStaticFunction, A.allocate) &&
+		__traits(isStaticFunction, A.deallocate) &&
+		__traits(isStaticFunction, A.isOwnerOf) &&
+		(hasReallocate!A ? is(typeof(A.reallocate)) && __traits(isStaticFunction, A.reallocate) : true) &&
+		(hasExtend!A ? is(typeof(A.extend)) && __traits(isStaticFunction, A.extend) : true) &&
+		(hasCanAllocate!A ? is(typeof(A.canAllocate)) && __traits(isStaticFunction, A.canAllocate) : true);
+}
+/**
 Returns: `true` if `Allocator`'s API functions are all `pure`.
 
 Useful for discriminating between allocators that rely on no global state versus ones that do.
@@ -221,7 +236,7 @@ if(isAllocator!A){
 		hasFunctionAttributes!(A.allocate, "pure") &&
 		hasFunctionAttributes!(A.deallocate, "pure") &&
 		hasFunctionAttributes!(A.isOwnerOf, "pure") &&
-		(hasReallocate!A ? hasFunctionAttributes!(A.reallocate, "pure") : true) &&
-		(hasExtend!A ? hasFunctionAttributes!(A.extend, "pure") : true) &&
-		(hasCanAllocate!A ? hasFunctionAttributes!(A.canAllocate, "pure") : true);
+		(hasReallocate!A ? is(typeof(A.reallocate)) && hasFunctionAttributes!(A.reallocate, "pure") : true) &&
+		(hasExtend!A ? is(typeof(A.extend)) && hasFunctionAttributes!(A.extend, "pure") : true) &&
+		(hasCanAllocate!A ? is(typeof(A.canAllocate)) && hasFunctionAttributes!(A.canAllocate, "pure") : true);
 }
