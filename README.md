@@ -16,9 +16,9 @@ Inline documentation is available in the library's source code:
 |[`memterface.iface`][iface]                     | The actual allocator API & how to use it. |
 |[`memterface.ctor`][ctor]                       | Create valid type instances with memory from allocators. |
 |[`memterface.wrap`][wrap]                       | Wrap allocators from [std.experimental.allocator][std.experimental.allocator]. |
-|[`memterface.allocator.gc`][gc]                 | D's built-in garbage collector. |
-|[`memterface.allocator.malloc`][malloc]         | The C standard library's `malloc`. |
-|[`memterface.allocator.bottom`][bottom]         | The fallback allocator used at the bottom of a chain of fallbacks. |
+|[`memterface.allocator.gc`][gc]                 | `GCAllocator`: D's built-in garbage collector. |
+|[`memterface.allocator.malloc`][malloc]         | `CAllocator`: The C standard library's `malloc`. |
+|[`memterface.allocator.bottom`][bottom]         | `BottomAllocator`: The fallback used at the bottom of a chain of fallbacks. |
 
 [iface]: https://git.sleeping.town/ichordev/memterface/src/source/memterface/iface.d
 [ctor]: https://git.sleeping.town/ichordev/memterface/src//source/memterface/ctor.d
