@@ -70,8 +70,8 @@ interface AllocatorInterface{
 	
 	The values in the memory pointed to by the returned slice are undefined. (i.e. do not have to be cleared in any way)
 	
-	Calling this function must never fail unless the system is out of memory. For allocators with
-	a fixed amount of pre-allocated space, a fallback to another allocator is recommended.
+	Calling this function must always either succeed, or terminate the program (e.g. with `OutOfMemoryError`).
+	For allocators with a fixed amount of pre-allocated space, a fallback to another allocator is recommended.
 	Otherwise, the optional `canAllocate` function can be implemented. If `canAllocate(size)` would've returned
 	`false` but this function is was called anyway, then it must throw an `OutOfMemoryError`. When `canAllocate`
 	is implemented, `allocate` (and `reallocate` where applicable) should also have the precondition `in(canAllocate(size))`
@@ -85,7 +85,6 @@ interface AllocatorInterface{
 	If an allocator allocates non-`null` zero-sized slices, it is best practice for it to fall back to return
 	`null` zero-sized slices if and when its state runs out of space for non-`null` zero-sized slices.
 	
-	Throws: `OutOfMemoryError` via `onOutOfMemoryError` when the system is out of memory.
 	*/
 	void[] allocate(size_t size) nothrow
 	out(memory; memory.length == size)
@@ -110,9 +109,9 @@ interface AllocatorInterface{
 	Must return `false` when `memory` points to memory owned by the allocator that has not yet allocated by
 	the user (e.g. via `allocate`), or has been deallocated.
 	
-	Calling this function must never fail. When creating a wrapper over a pre-existing allocator that makes it
-	absolutely impossible to determine if the allocator allocated a pointer (e.g. malloc) then this function
-	may always return `true` as long as:
+	Calling this function must never fail except for assertion failures and breach of contracts.
+	When creating a wrapper over a pre-existing allocator that makes it absolutely impossible to determine if the
+	allocator allocated a pointer (e.g. malloc) then this function may always return `true` as long as:
 	- It is well-documented that it always returns `true`, and the documentation explains why.
 	- The function is marked `@system` if the allocator will produce undefined behaviour when memory that it
 		does not own is passed to `deallocate`, `reallocate`, or `extend`.
@@ -129,14 +128,13 @@ interface AllocatorInterfaceWithReallocate: AllocatorInterface{
 	The allocator may extend `memory` in-place where possible. Otherwise, the value of `memory` before calling this
 	function will become invalid, and must cause `isOwnerOf(oldMemory)` to return `false`.
 	
-	Calling this function must never fail unless the system is out of memory. For allocators with
-	a fixed amount of pre-allocated space, a fallback to another allocator is recommended.
+	Calling this function must always either succeed, or terminate the program (e.g. with `OutOfMemoryError`).
+	For allocators with a fixed amount of pre-allocated space, a fallback to another allocator is recommended.
 	Otherwise, the optional `canAllocate` function can be implemented. If `canAllocate(size)` would've returned
 	`false` but this function is was called anyway, then it must throw an `OutOfMemoryError`. When `canAllocate`
 	is implemented, `allocate` (and `reallocate` where applicable) should also have the precondition `in(canAllocate(size))`
 	in order to assist in diagnosing the root cause of the error.
 	
-	Throws: `OutOfMemoryError` via `onOutOfMemoryError` when the system is out of memory.
 	*/
 	void reallocate(ref void[] memory, size_t newSize) nothrow
 	in(isOwnerOf(memory))
