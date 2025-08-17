@@ -30,7 +30,7 @@ For a similar function that handles arrays, see `newArray`.
 
 Similar to `make` from `std.experimental.allocator`.
 */
-T* constructNew(T, Allocator, Args...)(auto ref Allocator allocator, auto ref Args args)
+auto constructNew(T, Allocator, Args...)(auto ref Allocator allocator, auto ref Args args)
 if(isAllocator!Allocator){
 	static if(hasCanAllocate!Allocator){
 		if(!allocator.canAllocate(sizeInMemory!T))

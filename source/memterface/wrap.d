@@ -14,13 +14,13 @@ import std.traits;
 import memterface.iface;
 
 /**
-Wrap an allocator that uses the std.experimental.allocator interface.
+Wrap an allocator that uses the `std.experimental.allocator` interface.
 
 Unless `unsafe` is `true`, each function of the wrapped allocator must be `nothrow`, and the
 `deallocate` and `owns` functions are required.
 
 When using this wrapper, `size_t.sizeof` bytes more than requested are always allocated. These are
-used to make the `isOwnerOf` function work properly, since `owns` in the std.experimental.allocator
+used to make the `isOwnerOf` function work properly, since `owns` in the `std.experimental.allocator`
 may still return `true` even when the passed memory has been deallocated.
 
 Note that using this wrapper does not guarantee 100% conformance to the Memterface API. The wrapped

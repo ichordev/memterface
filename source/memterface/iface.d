@@ -84,7 +84,6 @@ interface AllocatorInterface{
 	`deallocate`d.
 	If an allocator allocates non-`null` zero-sized slices, it is best practice for it to fall back to return
 	`null` zero-sized slices if and when its state runs out of space for non-`null` zero-sized slices.
-	
 	*/
 	void[] allocate(size_t size) nothrow
 	out(memory; memory.length == size)
@@ -134,7 +133,6 @@ interface AllocatorInterfaceWithReallocate: AllocatorInterface{
 	`false` but this function is was called anyway, then it must throw an `OutOfMemoryError`. When `canAllocate`
 	is implemented, `allocate` (and `reallocate` where applicable) should also have the precondition `in(canAllocate(size))`
 	in order to assist in diagnosing the root cause of the error.
-	
 	*/
 	void reallocate(ref void[] memory, size_t newSize) nothrow
 	in(isOwnerOf(memory))
