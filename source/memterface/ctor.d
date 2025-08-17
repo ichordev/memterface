@@ -13,11 +13,106 @@ import core.lifetime;
 import std.algorithm.comparison, std.traits;
 import memterface.iface;
 
+/**
+Return a sub-slice of `memory` which starts on an `alignment`-byte boundary. The length of
+the returned sub-slice is `memory.length - alignment` bytes, so you should
+allocate `size + alignment` bytes of mmeory to pass to this function.
+
+Since this function only returns a sub-slice of `memory`, you cannot reliably call the original
+allocator's deallocate/reallocate/etc. functions with the returned sub-slice.
+Instead, you can call `removeAlignment(subSlice, alignment)` and pass its return value to the
+allocator instead.
+
+See_Also: `removeAlignment`
+*/
+void[] forceAlignment(void[] memory, size_t alignment) nothrow @nogc pure @safe
+in(alignment >= 1 && alignment <= 256)
+in(memory.length >= alignment){
+	const metaInd = cast(ubyte)((cast(size_t)&memory[0] - ubyte.sizeof) % alignment);
+	const startInd = metaInd + ubyte.sizeof;
+	*(() @trusted => cast(ubyte*)memory[metaInd..startInd])() = metaInd; //write the start index as a byte of metadata
+	return memory[startInd..$-(alignment - startInd)];
+}
+nothrow @nogc pure unittest{
+	import memterface.allocator;
+	enum alignment = 256;
+	void[] m = CAllocator().allocate(12 + alignment);
+	assert(cast(size_t)forceAlignment(m, alignment).ptr % alignment == 0);
+}
+
+/**
+Removes the alignment from a slice of memory returned by `forceAlignment`.
+
+Params:
+	alignedMemory = Must be a slice of memory returned by `forceAlignment`.
+	alignment = Must be the same as the value that was previously passed to `forceAlignment`.
+
+See_Also: `forceAlignment`
+*/
+void[] removeAlignment(void[] alignedMemory, size_t alignment) nothrow @nogc pure
+in(alignment >= 1 && alignment <= 256)
+in(alignedMemory !is null)
+out(memory; memory.length == alignedMemory.length + alignment){
+	const meta = *(() @trusted => cast(ubyte*)alignedMemory.ptr-1)();
+	assert(meta < alignment, "`alignment` is less than the alignment that was passed to `forceAlignment`; or `alignedMemory` wasn't returned by `forceAlignment`");
+	const start = meta + ubyte.sizeof;
+	return (() @trusted => (alignedMemory.ptr - start)[0..alignedMemory.length + alignment])();
+}
+nothrow @nogc pure unittest{
+	import memterface.allocator;
+	enum alignment = 256;
+	void[] m = CAllocator().allocate(12 + alignment);
+	void[] aligned = forceAlignment(m, alignment);
+	assert(removeAlignment(aligned, alignment) is m);
+}
+
 private template sizeInMemory(T){
 	static if(is(T == class) || is(T == interface))
-		enum size_t sizeInMemory = __traits(classInstanceSize, T);
+		enum size_t sizeInMemory = __traits(classInstanceSize, T) + __traits(classInstanceAlignment, T);
 	else
 		enum size_t sizeInMemory = T.sizeof;
+}
+
+/**
+Allocates enough memory to store an instance of `T` using `allocator`, and then initialises it to
+`T.init`; or `__traits(initSymbol, T)` if `T` is a class.
+
+Returns: A newly allocated & constructed instance of `T`; or `null` if `allocator` defines
+	`canAllocate` and it returns `false`. May also return `null` if `T.sizeof == 0`.
+
+See_Also: `newArray` is a similar function that handles arrays.
+
+Similar to `make` from `std.experimental.allocator`.
+*/
+auto initNew(T, Allocator)(auto ref Allocator allocator) nothrow
+if(isAllocator!Allocator){
+	static if(hasCanAllocate!Allocator){
+		if(allocator.canAllocate(sizeInMemory!T)){
+		}else
+			return null;
+	}
+	void[] memory = allocator.allocate(sizeInMemory!T);
+	static if(sizeInMemory!T == 0){
+		if(memory is null)
+			return null;
+	}
+	static if(is(T == class)){
+		memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
+		return () @trusted{
+			memory[] = __traits(initSymbol, T)[];
+			return cast(T)memory.ptr;
+		}();
+	}else{
+		T* ret = (() @trusted => cast(T*)memory)();
+		*ret = T.init;
+		return ret;
+	}
+}
+nothrow @nogc pure @safe unittest{
+	import memterface.allocator;
+	int* i = CAllocator().initNew!int();
+	assert(*i == 0);
+	assert(BottomAllocator().initNew!int() is null);
 }
 
 /**
@@ -26,7 +121,7 @@ Allocates enough memory to store an instance of `T` using `allocator`, and then 
 Returns: A newly allocated & constructed instance of `T`; or `null` if `allocator` defines
 	`canAllocate` and it returns `false`. May also return `null` if `T.sizeof == 0`.
 
-For a similar function that handles arrays, see `newArray`.
+See_Also: `newArray` is a similar function that handles arrays.
 
 Similar to `make` from `std.experimental.allocator`.
 */
@@ -36,12 +131,14 @@ if(isAllocator!Allocator){
 		if(!allocator.canAllocate(sizeInMemory!T))
 			return null;
 	}
-	auto memory = allocator.allocate(sizeInMemory!T);
+	void[] memory = allocator.allocate(sizeInMemory!T);
+	static if(is(T == class))
+		memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
 	return emplace!T(memory, forward!args);
 }
-unittest{
+nothrow @nogc pure unittest{
 	import memterface.allocator;
-	int* i = GCAllocator().constructNew!int(5);
+	int* i = CAllocator().constructNew!int(5);
 	assert(*i == 5);
 	assert(BottomAllocator().constructNew!int() is null);
 }
@@ -102,14 +199,14 @@ if(isAllocator!Allocator){
 		if(!allocator.canAllocate(arraySize))
 			return null;
 	}
-	auto memory = allocator.allocate(arraySize);
-	auto array = (() @trusted => cast(T[])memory)();
+	void[] memory = allocator.allocate(arraySize);
+	T[] array = (() @trusted => cast(T[])memory)();
 	newArrayInit(array);
 	return array;
 }
-unittest{
+nothrow @nogc pure @safe unittest{
 	import memterface.allocator;
-	int[] a = GCAllocator().newArray!int(10);
+	int[] a = CAllocator().newArray!int(10);
 	foreach(ref item; a)
 		assert(item == 0);
 	assert(BottomAllocator().newArray!int(1) is null);
@@ -145,7 +242,7 @@ if(isAllocator!Allocator){
 			allocator.reallocate(memory, arraySize);
 		}else{
 			void[] oldMemory = array;
-			auto memory = allocator.allocate(arraySize);
+			void[] memory = allocator.allocate(arraySize);
 			memory[0..oldMemory.length] = oldMemory[];
 			allocator.deallocate(oldMemory);
 		}
@@ -210,7 +307,10 @@ if(isAllocator!Allocator && (is(T == class) || is(T == interface))){
 	}else{
 		alias object = ptr;
 	}
-	auto memory = (cast(void*)object)[0..typeid(object).initializer.length];
+	auto typeID = typeid(object);
+	void[] memory = (cast(void*)object)[0..typeID.initializer.length];
+	static if(is(T == class))
+		memory = removeAlignment(memory, typeID.talign);
 	destroy(ptr);
 	allocator.deallocate(memory);
 	static if(__traits(isRef, ptr))
@@ -219,6 +319,9 @@ if(isAllocator!Allocator && (is(T == class) || is(T == interface))){
 
 /**
 Destroys `array` and then deallocates it with `allocator`.
+
+Does not deallocate any pointers contained within the array itself, which may cause a memory leak
+if the caller does not deallocate them first.
 
 `array` must have been allocated by `allocator`.
 
