@@ -355,7 +355,7 @@ void dispose(Allocator, T)(scope auto ref Allocator allocator, scope auto ref T*
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 	static if(is(typeof(doDestroy(*ptr))))
 		doDestroy(ptr);
-	allocator.deallocate((cast(void*)ptr)[0..T.sizeof]);
+	allocator.deallocate((() @trusted => ptr[0..1])());
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
@@ -363,7 +363,7 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 void dispose(T)(scope AllocatorInterface allocator, scope auto ref T* ptr){
 	static if(is(typeof(doDestroy(*ptr))))
 		doDestroy(ptr);
-	allocator.deallocate((cast(void*)ptr)[0..T.sizeof]);
+	allocator.deallocate((() @trusted => ptr[0..1])());
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
@@ -378,8 +378,7 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(T == class
 	}
 	auto typeID = typeid(object);
 	void[] memory = (cast(void*)object)[0..typeID.initializer.length];
-	static if(is(T == class))
-		memory = removeAlignment(memory, typeID.talign);
+	memory = removeAlignment(memory, typeID.talign);
 	destroy(ptr);
 	allocator.deallocate(memory);
 	static if(__traits(isRef, ptr))
@@ -395,8 +394,7 @@ if(is(T == class) || is(T == interface)){
 	}
 	auto typeID = typeid(object);
 	void[] memory = (cast(void*)object)[0..typeID.initializer.length];
-	static if(is(T == class))
-		memory = removeAlignment(memory, typeID.talign);
+	memory = removeAlignment(memory, typeID.talign);
 	destroy(ptr);
 	allocator.deallocate(memory);
 	static if(__traits(isRef, ptr))
