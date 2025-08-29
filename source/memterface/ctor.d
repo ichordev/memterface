@@ -28,16 +28,26 @@ See_Also: `removeAlignment`
 void[] forceAlignment(return scope void[] memory, size_t alignment) nothrow @nogc pure @safe
 in(alignment >= 1 && alignment <= 256)
 in(memory.length >= alignment){
-	const metaInd = cast(ubyte)((cast(size_t)&memory[0] - ubyte.sizeof) % alignment);
-	const startInd = metaInd + ubyte.sizeof;
+	const startInd = alignment - (cast(size_t)&memory[0] % alignment);
+	const metaInd = cast(ubyte)(startInd - ubyte.sizeof);
 	*(() @trusted => cast(ubyte*)memory[metaInd..startInd])() = metaInd; //write the start index as a byte of metadata
 	return memory[startInd..$-(alignment - startInd)];
 }
 nothrow @nogc pure @safe unittest{
 	import memterface.allocator;
 	enum alignment = 256;
-	void[] m = CAllocator().allocate(12 + alignment);
-	assert(cast(size_t)forceAlignment(m, alignment).ptr % alignment == 0);
+	foreach(_; 0..100){
+		void[] m = CAllocator().allocate(12 + alignment);
+		void[] aligned = forceAlignment(m, alignment);
+		assert(aligned.length == 12);
+		assert(cast(size_t)aligned.ptr % alignment == 0);
+	}
+	void[] m = CAllocator().allocate(12 + alignment + alignment);
+	void[] aligned = forceAlignment(m, alignment);
+	void[] alignedTwice = forceAlignment(aligned, alignment);
+	assert(alignedTwice !is aligned);
+	assert(alignedTwice.length == 12);
+	assert(cast(size_t)alignedTwice.ptr % alignment == 0);
 }
 
 /**
