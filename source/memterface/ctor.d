@@ -87,16 +87,16 @@ private template sizeInMemory(T){
 }
 
 private void[] allocDBIImpl(Allocator)(return scope ref Allocator allocator, size_t size) nothrow{
+	import core.builtins: unlikely;
 	static if(hasCanAllocate!Allocator){
-		if(allocator.canAllocate(size)){
-		}else return null;
+		if(unlikely(!allocator.canAllocate(size))) return null;
 	}
 	return allocator.allocate(size);
 }
 private void[] allocIFaceImpl(return scope AllocatorInterface allocator, size_t size) nothrow{
+	import core.builtins: unlikely;
 	if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
-		if(allocWCanAlloc.canAllocate(size)){
-		}else return null;
+		if(unlikely(!allocWCanAlloc.canAllocate(size))) return null;
 	}
 	return allocator.allocate(size);
 }
@@ -130,8 +130,8 @@ auto initNew(T, Allocator)(return scope auto ref Allocator allocator) nothrow
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 	auto memory = allocDBIImpl!Allocator(allocator, sizeInMemory!T);
 	static if(sizeInMemory!T == 0 || hasCanAllocate!Allocator){
-		if(memory !is null){
-		}else return null;
+		import core.builtins: unlikely;
+		if(unlikely(memory is null)) return null;
 	}
 	return initNewImpl!T(memory);
 }
@@ -162,19 +162,35 @@ auto constructNew(T, Allocator, Args...)(return scope auto ref Allocator allocat
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 	auto memory = allocDBIImpl!Allocator(allocator, sizeInMemory!T);
 	static if(sizeInMemory!T == 0 || hasCanAllocate!Allocator){
-		if(memory !is null){
-		}else return null;
+		import core.builtins: unlikely;
+		if(unlikely(memory is null)) return null;
 	}
-	static if(is(T == class))
+	static if(is(T == class)){
 		memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
-	return emplace!T(memory, forward!args);
+		T doEmplace() => emplace!T((() @trusted => cast(T)memory.ptr)(), forward!args);
+	}else{
+		T* doEmplace() => emplace!T((() @trusted => cast(T*)memory.ptr)(), forward!args);
+	}
+	scope(failure){
+		static if(!is(typeof(() pure{ doEmplace(); }()))) allocator.deallocate(memory);
+		else () @trusted{ allocator.deallocate(memory); }();
+	}
+	return doEmplace();
 }
 ///Ditto
 auto constructNew(T, Args...)(return scope AllocatorInterface allocator, auto ref Args args){
 	if(auto memory = allocIFaceImpl(allocator, sizeInMemory!T)){
-		static if(is(T == class))
+		static if(is(T == class)){
 			memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
-		return emplace!T(memory, forward!args);
+			T doEmplace() => emplace!T((() @trusted => cast(T)memory.ptr)(), forward!args);
+		}else{
+			T* doEmplace() => emplace!T((() @trusted => cast(T*)memory.ptr)(), forward!args);
+		}
+		scope(failure){
+			static if(!is(typeof(() pure{ doEmplace(); }()))) allocator.deallocate(memory);
+			else () @trusted{ allocator.deallocate(memory); }();
+		}
+		return doEmplace();
 	}
 	return null;
 }
@@ -188,10 +204,8 @@ private size_t newArraySize(T)(size_t length) nothrow @nogc pure @safe{
 		import core.checkedint: mulu;
 		bool overflow;
 		const size = mulu(length, T.sizeof, overflow);
-		if(!overflow)
-			return size;
-		else
-			onOutOfMemoryError();
+		if(!overflow) return size;
+		else onOutOfMemoryError();
 	}
 }
 
@@ -203,12 +217,16 @@ private void newArrayInit(T)(T[] array) nothrow @nogc pure @trusted{
 	}else static if(is(U == char) || is(U == wchar)){ //types with only FF bytes
 		import core.stdc.string: memset;
 		memset(&array[0], 0xFF, T.sizeof * array.length);
-	}else{
-		auto initSymbol = T.init;
+	}else static if(T.sizeof > 0){
 		void[] voidArray = array;
 		
 		import core.stdc.string: memcpy;
-		memcpy(&voidArray[0], &initSymbol, T.sizeof);
+		static if(is(T == struct) || is(T == class) || is(T == union)){
+			memcpy(&voidArray[0], &__traits(initSymbol, T)[0], T.sizeof);
+		}else{
+			const initSymbol = T.init;
+			memcpy(&voidArray[0], &initSymbol, T.sizeof);
+		}
 		size_t alreadyCopied = T.sizeof;
 		while(alreadyCopied < voidArray.length){
 			const thisCopyLength = min(alreadyCopied, voidArray.length-alreadyCopied);
@@ -231,7 +249,7 @@ T[] newArray(T, Allocator)(return scope auto ref Allocator allocator, size_t len
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 	if(auto memory = allocDBIImpl!Allocator(allocator, newArraySize!T(length))){
 		T[] array = (() @trusted => cast(T[])memory)();
-		newArrayInit(array);
+		newArrayInit!T(array);
 		return array;
 	}
 	return null;
@@ -240,7 +258,7 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 T[] newArray(T)(return scope AllocatorInterface allocator, size_t length) nothrow{
 	if(auto memory = allocIFaceImpl(allocator, newArraySize!T(length))){
 		T[] array = (() @trusted => cast(T[])memory)();
-		newArrayInit(array);
+		newArrayInit!T(array);
 		return array;
 	}
 	return null;
@@ -263,64 +281,68 @@ Copy constructors are not called.
 
 Returns: `true`; unless `allocator` defines `canAllocate` and it returns `false`.
 */
-bool resizeArray(Allocator, T)(return scope auto ref Allocator allocator, scope ref T[] array, size_t newLength)
+bool resizeArray(bool runDestructors=true, Allocator, T)(return scope auto ref Allocator allocator, scope ref T[] array, size_t newLength)
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 	const oldLength = array.length;
 	if(newLength != oldLength){
 		const arraySize = newArraySize!T(newLength);
 		static if(hasCanAllocate!Allocator){
-			if(allocator.canAllocate(arraySize)){
-			}else return false;
+			import core.builtins: unlikely;
+			if(unlikely(!allocator.canAllocate(arraySize))) return false;
 		}
-		static if(is(typeof(doDestroy(array[0])))){
+		scope(exit){
+			static if(hasReallocate!Allocator){
+				void[] memory = array;
+				allocator.reallocate(memory, arraySize);
+			}else{
+				void[] oldMemory = array;
+				void[] memory = allocator.allocate(arraySize);
+				memory[0..oldMemory.length] = oldMemory[];
+				allocator.deallocate(oldMemory);
+			}
+			array = (() @trusted => cast(T[])memory)();
+			if(newLength > oldLength)
+				newArrayInit(array[oldLength..$]);
+		}
+		static if(runDestructors && is(typeof(doDestroy(array[0])))){
 			if(newLength < oldLength){
 				foreach(ref item; array[newLength..$])
 					doDestroy(item);
 			}
 		}
-		static if(hasReallocate!Allocator){
-			void[] memory = array;
-			allocator.reallocate(memory, arraySize);
-		}else{
-			void[] oldMemory = array;
-			void[] memory = allocator.allocate(arraySize);
-			memory[0..oldMemory.length] = oldMemory[];
-			allocator.deallocate(oldMemory);
-		}
-		array = (() @trusted => cast(T[])memory)();
-		if(newLength > oldLength)
-			newArrayInit(array[oldLength..$]);
 	}
 	return true;
 }
 ///Ditto
-bool resizeArray(T)(return scope AllocatorInterface allocator, scope ref T[] array, size_t newLength){
+bool resizeArray(bool runDestructors=true, T)(return scope AllocatorInterface allocator, scope ref T[] array, size_t newLength){
 	const oldLength = array.length;
 	if(newLength != oldLength){
 		const arraySize = newArraySize!T(newLength);
 		if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
-			if(allocWCanAlloc.canAllocate(arraySize)){
-			}else return false;
+			import core.builtins: unlikely;
+			if(unlikely(!allocWCanAlloc.canAllocate(arraySize))) return false;
 		}
-		static if(is(typeof(doDestroy(array[0])))){
+		scope(exit){
+			void[] memory;
+			if(auto allocWRealloc = cast(AllocatorInterfaceWithReallocate)allocator){
+				memory = array;
+				allocWRealloc.reallocate(memory, arraySize);
+			}else{
+				void[] oldMemory = array;
+				memory = allocator.allocate(arraySize);
+				memory[0..oldMemory.length] = oldMemory[];
+				allocator.deallocate(oldMemory);
+			}
+			array = (() @trusted => cast(T[])memory)();
+			if(newLength > oldLength)
+				newArrayInit(array[oldLength..$]);
+		}
+		static if(runDestructors && is(typeof(doDestroy(array[0])))){
 			if(newLength < oldLength){
 				foreach(ref item; array[newLength..$])
 					doDestroy(item);
 			}
 		}
-		void[] memory;
-		if(auto allocWRealloc = cast(AllocatorInterfaceWithReallocate)allocator){
-			memory = array;
-			allocator.allocWRealloc(memory, arraySize);
-		}else{
-			void[] oldMemory = array;
-			memory = allocator.allocate(arraySize);
-			memory[0..oldMemory.length] = oldMemory[];
-			allocator.deallocate(oldMemory);
-		}
-		array = (() @trusted => cast(T[])memory)();
-		if(newLength > oldLength)
-			newArrayInit(array[oldLength..$]);
 	}
 	return true;
 }
@@ -355,64 +377,73 @@ nothrow @nogc pure @safe unittest{
 }
 
 /**
-Destroys `ptr` and then deallocates it with `allocator`.
+Destroys `ptr` if `runDestructors` is `true`, and then deallocates it with `allocator`.
 
 `ptr` must have been allocated by `allocator`.
 
 Similar to `dispose` from `std.experimental.allocator`.
 */
-void dispose(Allocator, T)(scope auto ref Allocator allocator, scope auto ref T* ptr)
+void dispose(bool runDestructors=true, Allocator, T)(scope auto ref Allocator allocator, scope auto ref T* ptr)
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	static if(is(typeof(doDestroy(*ptr))))
+	static if(runDestructors && is(typeof(doDestroy(*ptr))))
 		doDestroy(ptr);
 	allocator.deallocate((() @trusted => ptr[0..1])());
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
 ///Ditto
-void dispose(T)(scope AllocatorInterface allocator, scope auto ref T* ptr){
-	static if(is(typeof(doDestroy(*ptr))))
+void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T* ptr){
+	static if(runDestructors && is(typeof(doDestroy(*ptr))))
 		doDestroy(ptr);
 	allocator.deallocate((() @trusted => ptr[0..1])());
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
 
-///Ditto
-void dispose(Allocator, T)(scope auto ref Allocator allocator, scope auto ref T ptr)
+/**
+Destroys `ptr` if `runDestructors` is `true`, and then deallocates it with `allocator`.
+This method is recommended over just passing a class instance directly to `allocator.deallocate`
+due to runtime polymorphism; and is required for class instances allocated with `constructNew` or
+`initNew` because they need to be passed through `removeAlignment` first.
+
+`ptr` must have been allocated by `allocator`.
+
+Similar to `dispose` from `std.experimental.allocator`.
+*/
+void dispose(bool runDestructors=true, Allocator, T)(scope auto ref Allocator allocator, scope auto ref T ptr)
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(T == class) || is(T == interface))){
-	static if(is(T == interface)){
+	static if(is(T == interface))
 		auto object = cast(Object)ptr;
-	}else{
+	else
 		alias object = ptr;
-	}
 	auto typeID = typeid(object);
 	void[] memory = (cast(void*)object)[0..typeID.initializer.length];
 	memory = removeAlignment(memory, typeID.talign);
-	destroy(ptr);
+	static if(runDestructors)
+		destroy(ptr);
 	allocator.deallocate(memory);
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
 ///Ditto
-void dispose(T)(scope AllocatorInterface allocator, scope auto ref T ptr)
+void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T ptr)
 if(is(T == class) || is(T == interface)){
-	static if(is(T == interface)){
+	static if(is(T == interface))
 		auto object = cast(Object)ptr;
-	}else{
+	else
 		alias object = ptr;
-	}
 	auto typeID = typeid(object);
 	void[] memory = (cast(void*)object)[0..typeID.initializer.length];
 	memory = removeAlignment(memory, typeID.talign);
-	destroy(ptr);
+	static if(runDestructors)
+		destroy(ptr);
 	allocator.deallocate(memory);
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
 
 /**
-Destroys `array` and then deallocates it with `allocator`.
+Destroys `array` if `runDestructors` is `true`, and then deallocates it with `allocator`.
 
 Does not deallocate any pointers contained within the array itself, which may cause a memory leak
 if the caller does not deallocate them first.
@@ -421,9 +452,9 @@ if the caller does not deallocate them first.
 
 Similar to `dispose` from `std.experimental.allocator`.
 */
-void dispose(Allocator, T)(scope auto ref Allocator allocator, scope auto ref T[] array)
+void dispose(bool runDestructors=true, Allocator, T)(scope auto ref Allocator allocator, scope auto ref T[] array)
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	static if(is(typeof(doDestroy(array[0])))){
+	static if(runDestructors && is(typeof(doDestroy(array[0])))){
 		foreach(ref item; array)
 			doDestroy(item);
 	}
@@ -432,8 +463,8 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 		array = null;
 }
 ///Ditto
-void dispose(T)(scope AllocatorInterface allocator, scope auto ref T[] array){
-	static if(is(typeof(doDestroy(array[0])))){
+void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T[] array){
+	static if(runDestructors && is(typeof(doDestroy(array[0])))){
 		foreach(ref item; array)
 			doDestroy(item);
 	}
