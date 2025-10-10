@@ -198,7 +198,7 @@ auto constructNew(T, Args...)(return scope AllocatorInterface allocator, auto re
 pragma(inline,true)
 private size_t newArraySize(T)(size_t length) nothrow @nogc pure @safe{
 	static if(T.sizeof <= 1){
-		return size = length * T.sizeof;
+		return length * T.sizeof;
 	}else{
 		import core.exception: onOutOfMemoryError;
 		import core.checkedint: mulu;

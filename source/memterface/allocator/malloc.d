@@ -18,9 +18,7 @@ Warning: Does not implement `isOwnerOf` properly (it always returns `true`) due 
 */
 struct CAllocator{
 	///Wraps a call to `core.memory.pureMalloc`
-	static void[] allocate(size_t size) nothrow @nogc pure @trusted
-	out(memory; memory.length == size)
-	out(memory; memory is null || isOwnerOf(memory)){
+	static void[] allocateImpl(size_t size) nothrow @nogc pure @trusted{
 		auto ptr = pureMalloc(size);
 		if(ptr)
 			return ptr[0..size];
@@ -29,30 +27,20 @@ struct CAllocator{
 	}
 	
 	///Wraps a call to `core.memory.pureFree`
-	static void deallocate(void[] memory) nothrow @nogc pure @system
-	in(isOwnerOf(memory)) =>
+	static void deallocateImpl(void[] memory) nothrow @nogc pure @system =>
 		pureFree(memory.ptr);
 	
-	/**
-	Warning: This function lies by always returning `true` if `memory` is not `null`!
-	
-	Unfortunately there is no way to check if `malloc` allocated a pointer, so we must
-	implement this method incorrectly. This means that calling `deallocate` or `reallocate`
-	with `memory` may result in undefined behaviour!
-	*/
-	static bool isOwnerOf(const(void)[] memory) nothrow @nogc pure @system =>
-		memory.ptr !is null;
-	
 	///Wraps a call to `core.memory.pureRealloc`
-	static void reallocate(ref void[] memory, size_t newSize) nothrow @nogc pure @system
-	in(isOwnerOf(memory))
-	out(; memory.length == newSize){
+	static void reallocateImpl(ref void[] memory, size_t newSize) nothrow @nogc pure @system{
 		auto newPtr = pureRealloc(memory.ptr, newSize);
 		if(newPtr)
 			memory = newPtr[0..newSize];
 		else
 			onOutOfMemoryError();
 	}
+	
+	import memterface.wrap;
+	mixin ImplementIsOwnerOf!();
 }
 static assert(isAllocator!CAllocator);
 static assert(hasReallocate!CAllocator);
