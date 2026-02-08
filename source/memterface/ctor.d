@@ -167,10 +167,11 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 	}
 	static if(is(T == class)){
 		memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
-		T doEmplace() => emplace!T((() @trusted => cast(T)memory.ptr)(), forward!args);
+		alias TRef = T;
 	}else{
-		T* doEmplace() => emplace!T((() @trusted => cast(T*)memory.ptr)(), forward!args);
+		alias TRef = T*;
 	}
+	TRef doEmplace() => emplace!T((() @trusted => cast(TRef)memory.ptr)(), forward!args);
 	scope(failure){
 		static if(!is(typeof(() pure{ doEmplace(); }()))) allocator.deallocate(memory);
 		else () @trusted{ allocator.deallocate(memory); }();
@@ -182,10 +183,11 @@ auto constructNew(T, Args...)(return scope AllocatorInterface allocator, auto re
 	if(auto memory = allocIFaceImpl(allocator, sizeInMemory!T)){
 		static if(is(T == class)){
 			memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
-			T doEmplace() => emplace!T((() @trusted => cast(T)memory.ptr)(), forward!args);
+			alias TRef = T;
 		}else{
-			T* doEmplace() => emplace!T((() @trusted => cast(T*)memory.ptr)(), forward!args);
+			alias TRef = T*;
 		}
+		TRef doEmplace() => emplace!T((() @trusted => cast(TRef)memory.ptr)(), forward!args);
 		scope(failure){
 			static if(!is(typeof(() pure{ doEmplace(); }()))) allocator.deallocate(memory);
 			else () @trusted{ allocator.deallocate(memory); }();

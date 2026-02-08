@@ -358,3 +358,47 @@ pragma(inline,true){
 	}
 	return cast(size_t)ret;
 }*/
+
+class Classify(Allocator): AllocatorInterfacesFor!Allocator
+if(isAllocator!Allocator){
+	Allocator allocator;
+	
+	this()(auto ref Allocator allocator){
+		this.allocator = allocator;
+	}
+	
+	void[] allocate(size_t size) nothrow =>
+		allocator.allocate(size);
+	
+	void deallocate(void[] memory) nothrow =>
+		allocator.deallocate(memory);
+	
+	bool isOwnerOf(const(void)[] memory) const nothrow =>
+		allocator.isOwnerOf(memory);
+	
+	static if(hasReallocate!Allocator){
+		void reallocate(ref void[] memory, size_t newSize) nothrow =>
+			allocator.reallocate(memory, newSize);
+	}
+	static if(hasExtend!Allocator){
+		size_t extend(ref void[] memory, size_t sizeDelta) nothrow =>
+			allocator.extend(memory, sizeDelta);
+	}
+	static if(hasCanAllocate!Allocator){
+		bool canAllocate(size_t size) const nothrow =>
+			allocator.canAllocate(size);
+	}
+}
+unittest{
+	void testIAlloc(AllocatorInterface ialloc){
+		auto mem = ialloc.allocate(300);
+		assert(mem.length == 300);
+		assert(ialloc.isOwnerOf(mem));
+		ialloc.deallocate(mem);
+	}
+	
+	import memterface.allocator.malloc;
+	testIAlloc(new Classify!CAllocator(CAllocator()));
+	import memterface.allocator.gc;
+	testIAlloc(new Classify!GCAllocator(GCAllocator()));
+}

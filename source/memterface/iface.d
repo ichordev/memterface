@@ -222,6 +222,17 @@ if(isAllocator!A){
 		hasFunctionAttributes!(A.canAllocate, "nothrow") &&
 		(hasFunctionAttributes!(A.canAllocate, "const") || __traits(isStaticFunction, A.canAllocate));
 }
+
+///Returns: a sequence of the class interfaces that `A` is compatible with.
+template AllocatorInterfacesFor(A)
+if(isAllocator!A){
+	import std.meta: AliasSeq;
+	alias AllocatorInterfacesFor = AliasSeq!(AllocatorInterface);
+	static if(hasReallocate!A)  AllocatorInterfacesFor = AliasSeq!(AllocatorInterfacesFor, AllocatorInterfaceWithReallocate);
+	static if(hasExtend!A)      AllocatorInterfacesFor = AliasSeq!(AllocatorInterfacesFor, AllocatorInterfaceWithExtend);
+	static if(hasCanAllocate!A) AllocatorInterfacesFor = AliasSeq!(AllocatorInterfacesFor, AllocatorInterfaceWithCanAllocate);
+}
+
 /**
 Returns: `true` if `Allocator`'s API functions are all `static`.
 
