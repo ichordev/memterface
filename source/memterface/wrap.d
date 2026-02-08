@@ -1,12 +1,10 @@
-/+
-+               Copyright 2025 Aya Partridge
-+ Distributed under the Boost Software License, Version 1.0.
-+     (See accompanying file LICENSE_1_0.txt or copy at
-+           http://www.boost.org/LICENSE_1_0.txt)
-+/
 /**
+Copyright: Copyright 2025–2026 Aya Partridge
+License: Distributed under the terms of the GNU Lesser General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See the accompanying `COPYING.LESSER.md` file or go to <https://www.gnu.org/licenses/> for more details.
+
 Templates to wrap allocators from [std.experimental.allocator](https://dlang.org/phobos/std_experimental_allocator.html),
-and to wrap allocators that do not provide a mechanism that neatly forwards to `isOwnerOf`.
+wrap allocators that do not provide a mechanism that neatly forwards to `isOwnerOf`, and to turn DBI allocators into
+classes with `Classify`.
 */
 module memterface.wrap;
 
@@ -359,6 +357,10 @@ pragma(inline,true){
 	return cast(size_t)ret;
 }*/
 
+/**
+Creates a class that wraps an instance of `Allocator`.
+Can be used to pass DBI allocators to non-template functions that only accept `AllocatorInterface`.
+*/
 class Classify(Allocator): AllocatorInterfacesFor!Allocator
 if(isAllocator!Allocator){
 	Allocator allocator;

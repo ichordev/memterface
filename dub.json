@@ -2,7 +2,7 @@
 	"name": "memterface",
 	"description": "Generic allocator API for templated code. Intended to supersede std.experimental.allocator.",
 	"authors": ["Aya Partridge"],
-	"license": "BSL-1.0",
+	"license": "GPL-3.0-or-later",
 	
 	"targetType": "staticLibrary",
 	"targetPath": "lib",

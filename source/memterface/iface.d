@@ -1,10 +1,7 @@
-/+
-+               Copyright 2025 Aya Partridge
-+ Distributed under the Boost Software License, Version 1.0.
-+     (See accompanying file LICENSE_1_0.txt or copy at
-+           http://www.boost.org/LICENSE_1_0.txt)
-+/
-/++
+/**
+Copyright: Copyright 2025–2026 Aya Partridge
+License: Distributed under the terms of the GNU Lesser General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See the accompanying `COPYING.LESSER.md` file or go to <https://www.gnu.org/licenses/> for more details.
+
 Interfaces for generic allocators.
 
 Allocators must follow the *interface* of `AllocatorInterface` (see below). However, making allocators
@@ -47,7 +44,7 @@ if(isAllocator!Allocator){ //This constraint also accepts classes that implement
 See_Also: `memterface.wrap` makes it possible to use `std.experimental.allocator` allocators
 via `Wrapped!T`; and wrappers over pre-existing allocators with no equivalent of
 `isOwnerOf` can be created with the assistance of `ImplementIsOwnerOf`.
-+/
+*/
 module memterface.iface;
 
 import std.traits;

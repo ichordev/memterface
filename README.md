@@ -54,7 +54,7 @@ For more information, inline documentation is available in the library's source 
 |------------------------------------------------|-------------|
 |[`memterface.iface`][iface]                     | The actual allocator API & how to use it. |
 |[`memterface.ctor`][ctor]                       | Create valid type instances with memory from allocators. |
-|[`memterface.wrap`][wrap]                       | Wrap allocators from [std.experimental.allocator][std.experimental.allocator] with `Wrapped!T`, and create wrappers over allocators with no equivalent of `isOwnerOf` with `ImplementIsOwnerOf`. |
+|[`memterface.wrap`][wrap]                       | Wrap allocators from [std.experimental.allocator][std.experimental.allocator] with `Wrapped!T`, create wrappers over allocators with no equivalent of `isOwnerOf` with `ImplementIsOwnerOf`, and turn DBI allocators into classes with `Classify!T`. |
 |[`memterface.allocator.gc`][gc]                 | `GCAllocator`: D's built-in garbage collector. |
 |[`memterface.allocator.malloc`][malloc]         | `CAllocator`: The C standard library's `malloc`. |
 |[`memterface.allocator.bottom`][bottom]         | `BottomAllocator`: The fallback used at the bottom of a chain of fallbacks. |
