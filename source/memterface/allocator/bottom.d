@@ -13,21 +13,18 @@ It never allocates, and is intended to fail any applicable operations.
 */
 struct BottomAllocator{
 	/**
-	Always asserts, since this allocator can't allocate anything.
+	Always throws an error, since this allocator can't allocate anything.
 	
 	Throws: `OutOfMemoryError` unconditionally (when preconditions are disabled).
 	*/
 	static void[] allocate(size_t size) nothrow @nogc pure @safe
 	out(memory; memory.length == size)
-	out(memory; (size == 0 && memory is null) || isOwnerOf(memory))
-	in(canAllocate(size)){
+	out(memory; (size == 0 && memory is null) || isOwnerOf(memory)){
 		onOutOfMemoryError();
 	}
 	
 	/**
 	Should never be reached in practice, since programmers should check `isOwnerOf` beforehand.
-	
-	Throws: `AssertError` unconditionally, since this allocator doesn't own any memory.
 	*/
 	static void deallocate(void[] memory) nothrow @nogc pure @safe
 	in(isOwnerOf(memory)){
@@ -40,21 +37,16 @@ struct BottomAllocator{
 	
 	/**
 	Should never be reached in practice, since programmers should check `isOwnerOf` beforehand.
-	
-	Throws: `AssertError` unconditionally, since this allocator doesn't own any memory.
 	*/
 	static void reallocate(ref void[] memory, size_t newSize) nothrow @nogc pure @safe
 	in(isOwnerOf(memory))
 	out(; (newSize == 0 && memory is null) || isOwnerOf(memory))
-	out(; memory.length == newSize)
-	in(canAllocate(newSize)){
+	out(; memory.length == newSize){
 		assert(0);
 	}
 	
 	/**
 	Should never be reached in practice, since programmers should check `isOwnerOf` beforehand.
-	
-	Throws: `AssertError` unconditionally, since this allocator doesn't own any memory.
 	*/
 	static size_t extend(ref void[] memory, size_t sizeDelta) nothrow @nogc pure @safe
 	in(isOwnerOf(memory))

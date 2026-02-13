@@ -74,9 +74,7 @@ interface AllocatorInterface{
 	Calling this function must always either succeed, or terminate the program (e.g. with `OutOfMemoryError`).
 	For allocators with a fixed amount of pre-allocated space, a fallback to another allocator is recommended.
 	Otherwise, the optional `canAllocate` function can be implemented. If `canAllocate(size)` would've returned
-	`false` but this function is was called anyway, then it must throw an `OutOfMemoryError`. When `canAllocate`
-	is implemented, `allocate` (and `reallocate` where applicable) should also have the precondition `in(canAllocate(size))`
-	in order to assist in diagnosing the root cause of the error.
+	`false` but this function is called anyway, then it must throw an `OutOfMemoryError`.
 	
 	Zero-sized allocations must return zero-sized slices, which may or may not point to `null`.
 	`null` zero-sized slices are not owned by the allocator, and therefore cannot be `deallocate`d.
@@ -129,9 +127,7 @@ interface AllocatorInterfaceWithReallocate: AllocatorInterface{
 	Calling this function must always either succeed, or terminate the program (e.g. with `OutOfMemoryError`).
 	For allocators with a fixed amount of pre-allocated space, a fallback to another allocator is recommended.
 	Otherwise, the optional `canAllocate` function can be implemented. If `canAllocate(size)` would've returned
-	`false` but this function is was called anyway, then it must throw an `OutOfMemoryError`. When `canAllocate`
-	is implemented, `allocate` (and `reallocate` where applicable) should also have the precondition
-	`in(canAllocate(size))` in order to assist in diagnosing the root cause of the error.
+	`false` but this function is was called anyway, then it must throw an `OutOfMemoryError`.
 	
 	This extension should only be implemented if it provides some benefit over simply
 	allocating `newSize` and copying the contents of `memory` into it like so:
@@ -179,9 +175,6 @@ interface AllocatorInterfaceWithCanAllocate: AllocatorInterface{
 		auto memC = allocator.allocate(1); //may also throw an error, since we checked `canAllocate(100)` beforehand not `canAllocate(1)`!
 	}
 	```
-	
-	When this function is implemented, `allocate` (and `reallocate` where applicable) should also have
-	the precondition `in(canAllocate(size))` in order to assist in diagnosing the root cause of the error.
 	
 	Returns: `true` if enough space is free (*in the allocator*, not necessarily in the system)
 		to call `allocate(size)`, or `reallocate(someMemory, size)` (if implemented),
