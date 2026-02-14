@@ -9,6 +9,7 @@ Functions to automatically allocate memory and construct/initialise a data type 
 */
 module memterface.ctor;
 
+import core.builtins: unlikely;
 import core.lifetime;
 import std.algorithm.comparison, std.traits;
 import memterface.iface;
@@ -86,119 +87,112 @@ private template sizeInMemory(T){
 		enum size_t sizeInMemory = T.sizeof;
 }
 
-private void[] allocDBIImpl(Allocator)(return scope ref Allocator allocator, size_t size) nothrow{
-	import core.builtins: unlikely;
-	static if(hasCanAllocate!Allocator){
-		if(unlikely(!allocator.canAllocate(size))) return null;
+private template RefOf(T){
+	static if(is(T == class)){
+		alias RefOf = T;
+	}else{
+		alias RefOf = T*;
 	}
-	return allocator.allocate(size);
-}
-private void[] allocIFaceImpl(return scope AllocatorInterface allocator, size_t size) nothrow{
-	import core.builtins: unlikely;
-	if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
-		if(unlikely(!allocWCanAlloc.canAllocate(size))) return null;
-	}
-	return allocator.allocate(size);
 }
 
-private auto initNewImpl(T)(return scope void[] memory) nothrow{
+pragma(inline,true)
+private auto initNewImpl(T)(return scope void[] memory) nothrow @nogc pure @trusted{
 	static if(is(T == class)){
 		memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
-		return () @trusted{
-			memory[] = __traits(initSymbol, T)[];
-			return cast(T)memory.ptr;
-		}();
+		import core.stdc.string: memcpy;
+		memcpy(memory.ptr, __traits(initSymbol, T).ptr, __traits(classInstanceSize, T));
+		return cast(T)memory.ptr;
 	}else{
-		T* ret = (() @trusted => cast(T*)memory)();
-		*ret = T.init;
-		return ret;
+		return initArray!T(memory).ptr;
 	}
 }
 
 /**
-Allocates enough memory to store an instance of `T` using `allocator`, and then initialises it to
-`T.init`; or `__traits(initSymbol, T)` if `T` is a class.
+Allocates enough memory to store a heap-allocated instance of `T` using `allocator`, and then
+initialises it to `T.init`; or `__traits(initSymbol, T)` if `T` is a class.
 
-Returns: A newly allocated & constructed instance of `T`; or `null` if `allocator` defines
-	`canAllocate` and it returns `false`. May also return `null` if `T.sizeof == 0`.
+This function should always be inferred as `nothrow` unless `opFail` throws.
+
+The optional callback `onFail` may be passed, which will be called if `allocator.canAllocate` is defined and returns `false`.
+`onFail` must return a type that converts to an instance of `T`, which will be returned by `initNew`.
+
+Returns: A newly default-initialised heap-allocated instance of `T`; or
+	the result of `onFail` (if passed) when allocation fails.
 
 See_Also: `newArray` is a similar function that handles arrays.
-
-Similar to `make` from `std.experimental.allocator`.
 */
-auto initNew(T, Allocator)(return scope auto ref Allocator allocator) nothrow
-if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	auto memory = allocDBIImpl!Allocator(allocator, sizeInMemory!T);
-	static if(sizeInMemory!T == 0 || hasCanAllocate!Allocator){
-		import core.builtins: unlikely;
-		if(unlikely(memory is null)) return null;
+auto initNew(T, Allocator, F)(return scope auto ref Allocator allocator, scope F onFail=null)
+if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(F == typeof(null)) || is(typeof(onFail()): typeof(initNewImpl!T([]))))){
+	static if(!is(F == typeof(null)) && hasCanAllocate!Allocator){
+		if(unlikely(!allocator.canAllocate(sizeInMemory!T))) return onFail();
 	}
-	return initNewImpl!T(memory);
+	return initNewImpl!T(allocator.allocate(sizeInMemory!T));
 }
 ///Ditto
-auto initNew(T)(return scope AllocatorInterface allocator) nothrow{
-	if(auto memory = allocIFaceImpl(allocator, sizeInMemory!T))
-		return initNewImpl!T(memory);
-	return null;
+auto initNew(T, F)(return scope AllocatorInterface allocator, scope F onFail=null)
+if(is(F == typeof(null)) || is(typeof(onFail()): typeof(initNewImpl!T([])))){
+	static if(!is(F == typeof(null))){
+		if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
+			if(unlikely(!allocWCanAlloc.canAllocate(sizeInMemory!T))) return onFail();
+		}
+	}
+	return initNewImpl!T(allocator.allocate(sizeInMemory!T));
 }
 nothrow @nogc pure @safe unittest{
 	import memterface.allocator;
 	int* i = CAllocator().initNew!int();
 	assert(*i == 0);
-	assert(BottomAllocator().initNew!int() is null);
+	assert(BottomAllocator().initNew!int(() => null) is null);
 }
 
-/**
-Allocates enough memory to store an instance of `T` using `allocator`, and then constructs it with `args`.
-
-Returns: A newly allocated & constructed instance of `T`; or `null` if `allocator` defines
-	`canAllocate` and it returns `false`. May also return `null` if `T.sizeof == 0`.
-
-See_Also: `newArray` is a similar function that handles arrays.
-
-Similar to `make` from `std.experimental.allocator`.
-*/
-auto constructNew(T, Allocator, Args...)(return scope auto ref Allocator allocator, auto ref Args args)
-if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	auto memory = allocDBIImpl!Allocator(allocator, sizeInMemory!T);
-	static if(sizeInMemory!T == 0 || hasCanAllocate!Allocator){
-		import core.builtins: unlikely;
-		if(unlikely(memory is null)) return null;
-	}
+pragma(inline,true)
+private auto constructNewImpl(alias doEmplace, T, Allocator)(return scope auto ref Allocator allocator){
+	auto memory = allocator.allocate(sizeInMemory!T);
 	static if(is(T == class)){
 		memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
-		alias TRef = T;
-	}else{
-		alias TRef = T*;
 	}
-	TRef doEmplace() => emplace!T((() @trusted => cast(TRef)memory.ptr)(), forward!args);
 	scope(failure){
 		static if(!is(typeof(() pure{ doEmplace(); }()))) allocator.deallocate(memory);
 		else () @trusted{ allocator.deallocate(memory); }();
 	}
-	return doEmplace();
+	return doEmplace(memory);
+}
+
+/**
+Allocates enough memory to store a heap-allocated instance of `T` using `allocator`, and then
+calls its constructor with `args`.
+
+The optional callback `onFail` may be passed, which will be called if `allocator.canAllocate` is defined and returns `false`.
+`onFail` must return a type that converts to an instance of `T`, which will be returned by `initNew`.
+Note that `onFail` will NOT be called if `T`'s constructor throws.
+
+Returns: A newly constructed heap-allocated instance of `T`; or
+	the result of `onFail` (if passed) when allocation fails.
+
+See_Also: `newArray` is a similar function that handles arrays.
+
+Note: This function is roughly equivalent to `make` from `std.experimental.allocator`.
+*/
+auto constructNew(T, Allocator, F, Args...)(return scope auto ref Allocator allocator, auto ref Args args, scope F onFail=null)
+if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(F == typeof(null)) || is(typeof(onFail()): typeof(initNewImpl!T([]))))){
+	static if(!is(F == typeof(null)) && hasCanAllocate!Allocator){
+		if(unlikely(!allocator.canAllocate(sizeInMemory!T))) return onFail();
+	}
+	return constructNewImpl!((void[] memory) => emplace!T((() @trusted => cast(RefOf!T)memory.ptr)(), forward!args), T, Allocator)(allocator);
 }
 ///Ditto
-auto constructNew(T, Args...)(return scope AllocatorInterface allocator, auto ref Args args){
-	if(auto memory = allocIFaceImpl(allocator, sizeInMemory!T)){
-		static if(is(T == class)){
-			memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
-			alias TRef = T;
-		}else{
-			alias TRef = T*;
+auto constructNew(T, F, Args...)(return scope AllocatorInterface allocator, auto ref Args args, scope F onFail=null)
+if(is(F == typeof(null)) || is(typeof(onFail()): typeof(initNewImpl!T([])))){
+	static if(!is(F == typeof(null))){
+		if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
+			if(unlikely(!allocWCanAlloc.canAllocate(sizeInMemory!T))) return false;
 		}
-		TRef doEmplace() => emplace!T((() @trusted => cast(TRef)memory.ptr)(), forward!args);
-		scope(failure){
-			static if(!is(typeof(() pure{ doEmplace(); }()))) allocator.deallocate(memory);
-			else () @trusted{ allocator.deallocate(memory); }();
-		}
-		return doEmplace();
 	}
-	return null;
+	return constructNewImpl!((void[] memory) => emplace!T((() @trusted => cast(RefOf!T)memory.ptr)(), forward!args), T, AllocatorInterface)(allocator);
 }
 
 pragma(inline,true)
-private size_t newArraySize(T)(size_t length) nothrow @nogc pure @safe{
+private size_t getArraySize(T)(size_t length) nothrow @nogc pure @safe{
 	static if(T.sizeof <= 1){
 		return length * T.sizeof;
 	}else{
@@ -211,139 +205,165 @@ private size_t newArraySize(T)(size_t length) nothrow @nogc pure @safe{
 	}
 }
 
-private void newArrayInit(T)(T[] array) nothrow @nogc pure @trusted{
+pragma(inline,true)
+private T[] initArray(T)(return scope void[] array) nothrow @nogc pure @trusted{
 	alias U = Unqual!T;
-	static if(__traits(isZeroInit, T)){ //types with only 00 bytes
-		import core.stdc.string: memset;
-		memset(&array[0], 0x00, T.sizeof * array.length);
-	}else static if(is(U == char) || is(U == wchar)){ //types with only FF bytes
-		import core.stdc.string: memset;
-		memset(&array[0], 0xFF, T.sizeof * array.length);
-	}else static if(T.sizeof > 0){
-		void[] voidArray = array;
-		
-		import core.stdc.string: memcpy;
-		static if(is(T == struct) || is(T == class) || is(T == union)){
-			memcpy(&voidArray[0], &__traits(initSymbol, T)[0], T.sizeof);
-		}else{
+	if(array.length){
+		static if(__traits(isZeroInit, T)){ //types with only 00 bytes
+			import core.stdc.string: memset;
+			memset(&array[0], 0x00, array.length);
+		}else static if(is(U == char) || is(U == wchar)){ //types with only FF bytes
+			import core.stdc.string: memset;
+			memset(&array[0], 0xFF, array.length);
+		}else static if(T.sizeof == 1){
+			import core.stdc.string: memset;
 			const initSymbol = T.init;
-			memcpy(&voidArray[0], &initSymbol, T.sizeof);
-		}
-		size_t alreadyCopied = T.sizeof;
-		while(alreadyCopied < voidArray.length){
-			const thisCopyLength = min(alreadyCopied, voidArray.length-alreadyCopied);
-			memcpy(&voidArray[alreadyCopied], &voidArray[0], thisCopyLength);
-			alreadyCopied += thisCopyLength;
+			memcpy(&array[0], *cast(ubyte*)&initSymbol, array.length);
+		}else static if(T.sizeof > 0){
+			import core.stdc.string: memcpy;
+			static if(is(T == struct) || is(T == union)){
+				memcpy(&array[0], &__traits(initSymbol, T)[0], T.sizeof);
+			}else{
+				const initSymbol = T.init;
+				memcpy(&array[0], &initSymbol, T.sizeof);
+			}
+			size_t alreadyCopied = T.sizeof;
+			while(alreadyCopied < array.length){
+				const thisCopyLength = min(alreadyCopied, array.length-alreadyCopied);
+				memcpy(&array[alreadyCopied], &array[0], thisCopyLength);
+				alreadyCopied += thisCopyLength;
+			}
 		}
 	}
+	return cast(T[])array;
 }
 
 /**
 Allocates enough memory to store an array of `T` with `length` elements using `allocator`,
 and then default-initialises each element.
 
-Returns: A newly allocated & default-initialised `T[]`; or `null` if `allocator` defines
-	`canAllocate` and it returns `false`. May also return `null` if `T.sizeof == 0`.
+This function should always be inferred as `nothrow` unless `opFail` throws.
+
+The optional callback `onFail` may be passed, which will be called if `allocator.canAllocate` is defined and returns `false`.
+`onFail` must return a type that converts to `T[]`, which will be returned by `newArray`.
+
+Returns: A newly allocated & default-initialised `T[]`; or
+	the result of `onFail` (if passed) when allocation fails.
 
 Similar to `makeArray` from `std.experimental.allocator`.
 */
-T[] newArray(T, Allocator)(return scope auto ref Allocator allocator, size_t length) nothrow
-if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	if(auto memory = allocDBIImpl!Allocator(allocator, newArraySize!T(length))){
-		T[] array = (() @trusted => cast(T[])memory)();
-		newArrayInit!T(array);
-		return array;
+T[] newArray(T, Allocator, F)(return scope auto ref Allocator allocator, size_t length, scope F onFail=null)
+if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(F == typeof(null)) || is(typeof(onFail()): T[]))){
+	const size = getArraySize!T(length);
+	static if(!is(F == typeof(null)) && hasCanAllocate!Allocator){
+		if(unlikely(!allocator.canAllocate(size))) return onFail();
 	}
-	return null;
+	return initArray!T(allocator.allocate(size));
 }
 ///Ditto
-T[] newArray(T)(return scope AllocatorInterface allocator, size_t length) nothrow{
-	if(auto memory = allocIFaceImpl(allocator, newArraySize!T(length))){
-		T[] array = (() @trusted => cast(T[])memory)();
-		newArrayInit!T(array);
-		return array;
+T[] newArray(T, F)(return scope AllocatorInterface allocator, size_t length, scope F onFail=null)
+if(is(F == typeof(null)) || is(typeof(onFail()): T[])){
+	const size = getArraySize!T(length);
+	static if(!is(F == typeof(null))){
+		if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
+			if(unlikely(!allocWCanAlloc.canAllocate(size))) return onFail();
+		}
 	}
-	return null;
+	return initArray!T(allocator.allocate(size));
 }
 nothrow @nogc pure @safe unittest{
 	import memterface.allocator;
 	int[] a = CAllocator().newArray!int(10);
 	foreach(ref item; a)
 		assert(item == 0);
-	assert(BottomAllocator().newArray!int(1) is null);
+	assert(BottomAllocator().newArray!int(1, () => null) is null);
 }
 
 /**
-Resizes `array` to have `newLength` elements using `allocator`.
+Resizes `array` to have `newLength` elements using `allocator`. If `array` is `null`, it is newly allocated.
+`array` must have been originally allocated with `allocator` unless it is `null`.
 
-`array` must have been originally allocated with `allocator`.
+The optional callback `onFail` may be passed, which will be called if `allocator.canAllocate` is defined and returns `false`.
+`onFail` must return a type that converts to `bool`, which will be returned from `resizeArray`.
 
 New elements are default-initialised. Removed elements get destroyed appropriately.
-Copy constructors are not called.
 
-Returns: `true`; unless `allocator` defines `canAllocate` and it returns `false`.
+Note: Copy constructors are not called.
+
+Returns: `true`; or the result of `onFail` (if passed) when allocation fails.
 */
-bool resizeArray(bool runDestructors=true, Allocator, T)(return scope auto ref Allocator allocator, scope ref T[] array, size_t newLength)
-if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
+bool resizeArray(bool runDestructors=true, Allocator, T, F)(
+	return scope auto ref Allocator allocator, scope ref T[] array, size_t newLength, scope F onFail=null,
+)if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(F == typeof(null)) || is(typeof(onFail()): bool))){
 	const oldLength = array.length;
 	if(newLength != oldLength){
-		const arraySize = newArraySize!T(newLength);
-		static if(hasCanAllocate!Allocator){
-			import core.builtins: unlikely;
-			if(unlikely(!allocator.canAllocate(arraySize))) return false;
-		}
-		scope(exit){
-			static if(hasReallocate!Allocator){
-				void[] memory = array;
-				allocator.reallocate(memory, arraySize);
-			}else{
-				void[] oldMemory = array;
-				void[] memory = allocator.allocate(arraySize);
-				memory[0..oldMemory.length] = oldMemory[];
-				allocator.deallocate(oldMemory);
+		if(array !is null){
+			const arraySize = getArraySize!T(newLength);
+			static if(!is(F == typeof(null)) && hasCanAllocate!Allocator){
+				if(unlikely(!allocator.canAllocate(arraySize))) return cast(bool)onFail();
 			}
-			array = (() @trusted => cast(T[])memory)();
-			if(newLength > oldLength)
-				newArrayInit(array[oldLength..$]);
-		}
-		static if(runDestructors && is(typeof(doDestroy(array[0])))){
-			if(newLength < oldLength){
-				foreach(ref item; array[newLength..$])
-					doDestroy(item);
+			scope(exit){
+				static if(hasReallocate!Allocator){
+					void[] memory = array;
+					allocator.reallocate(memory, arraySize);
+				}else{
+					void[] oldMemory = array;
+					void[] memory = allocator.allocate(arraySize);
+					memory[0..oldMemory.length] = oldMemory[];
+					allocator.deallocate(oldMemory);
+				}
+				array = (() @trusted => cast(T[])memory)();
+				if(newLength > oldLength)
+					cast(void)initArray!T(array[oldLength..$]);
 			}
+			static if(runDestructors && is(typeof(doDestroy(array[0])))){
+				if(newLength < oldLength){
+					foreach(ref item; array[newLength..$])
+						doDestroy(item);
+				}
+			}
+		}else{
+			array = newArray!(T, Allocator)(allocator, newLength);
 		}
 	}
 	return true;
 }
 ///Ditto
-bool resizeArray(bool runDestructors=true, T)(return scope AllocatorInterface allocator, scope ref T[] array, size_t newLength){
+bool resizeArray(bool runDestructors=true, T, F)(
+	return scope AllocatorInterface allocator, scope ref T[] array, size_t newLength, scope F onFail=null,
+)if(is(F == typeof(null)) || is(typeof(onFail()): bool)){
 	const oldLength = array.length;
 	if(newLength != oldLength){
-		const arraySize = newArraySize!T(newLength);
-		if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
-			import core.builtins: unlikely;
-			if(unlikely(!allocWCanAlloc.canAllocate(arraySize))) return false;
-		}
-		scope(exit){
-			void[] memory;
-			if(auto allocWRealloc = cast(AllocatorInterfaceWithReallocate)allocator){
-				memory = array;
-				allocWRealloc.reallocate(memory, arraySize);
-			}else{
-				void[] oldMemory = array;
-				memory = allocator.allocate(arraySize);
-				memory[0..oldMemory.length] = oldMemory[];
-				allocator.deallocate(oldMemory);
+		if(array !is null){
+			const arraySize = getArraySize!T(newLength);
+			static if(!is(F == typeof(null))){
+				if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
+					if(unlikely(!allocWCanAlloc.canAllocate(arraySize))) return cast(bool)onFail();
+				}
 			}
-			array = (() @trusted => cast(T[])memory)();
-			if(newLength > oldLength)
-				newArrayInit(array[oldLength..$]);
-		}
-		static if(runDestructors && is(typeof(doDestroy(array[0])))){
-			if(newLength < oldLength){
-				foreach(ref item; array[newLength..$])
-					doDestroy(item);
+			scope(exit){
+				void[] memory;
+				if(auto allocWRealloc = cast(AllocatorInterfaceWithReallocate)allocator){
+					memory = array;
+					allocWRealloc.reallocate(memory, arraySize);
+				}else{
+					void[] oldMemory = array;
+					memory = allocator.allocate(arraySize);
+					memory[0..oldMemory.length] = oldMemory[];
+					allocator.deallocate(oldMemory);
+				}
+				array = (() @trusted => cast(T[])memory)();
+				if(newLength > oldLength)
+					cast(void)initArray!T(array[oldLength..$]);
 			}
+			static if(runDestructors && is(typeof(doDestroy(array[0])))){
+				if(newLength < oldLength){
+					foreach(ref item; array[newLength..$])
+						doDestroy(item);
+				}
+			}
+		}else{
+			array = newArray!T(allocator, newLength);
 		}
 	}
 	return true;
