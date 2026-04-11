@@ -4,8 +4,6 @@ License: Distributed under the terms of the GNU Lesser General Public License as
 */
 module memterface.allocator.malloc;
 
-import core.exception;
-import core.memory: pureFree, pureMalloc, pureRealloc;
 import memterface.iface;
 
 /**
@@ -15,13 +13,19 @@ Warning: Does not implement `isOwnerOf` properly (it always returns `true`) due 
 	limitations in the C standard library's API.
 */
 struct CAllocator{
+	import core.exception: onOutOfMemoryError;
+	import core.memory: pureFree, pureMalloc, pureRealloc;
+	
 	///Wraps a call to `core.memory.pureMalloc`
 	static void[] allocateImpl(size_t size) nothrow @nogc pure @trusted{
-		auto ptr = pureMalloc(size);
-		if(ptr)
-			return ptr[0..size];
-		else
-			onOutOfMemoryError();
+		if(size > 0){
+			if(auto ptr = pureMalloc(size))
+				return ptr[0..size];
+			else
+				onOutOfMemoryError();
+		}else{
+			return null;
+		}
 	}
 	
 	///Wraps a call to `core.memory.pureFree`
@@ -30,11 +34,15 @@ struct CAllocator{
 	
 	///Wraps a call to `core.memory.pureRealloc`
 	static void reallocateImpl(ref void[] memory, size_t newSize) nothrow @nogc pure @system{
-		auto newPtr = pureRealloc(memory.ptr, newSize);
-		if(newPtr)
-			memory = newPtr[0..newSize];
-		else
-			onOutOfMemoryError();
+		if(newSize > 0){
+			if(auto newPtr = pureRealloc(memory.ptr, newSize))
+				memory = newPtr[0..newSize];
+			else
+				onOutOfMemoryError();
+		}else{
+			deallocateImpl(memory);
+			memory = null;
+		}
 	}
 	
 	import memterface.wrap;

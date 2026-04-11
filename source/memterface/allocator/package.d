@@ -29,20 +29,13 @@ unittest{
 			A allocator = Allocator();
 		}
 		void[] memory = void;
-		if((){
-			static if(hasCanAllocate!A)
-				return allocator.canAllocate(0);
-			else return true;
-		}()){
-			memory = allocator.allocate(0);
-			assert(memory.length == 0);
-			if(allocator.isOwnerOf(memory)){
-				allocator.deallocate(memory);
-				
-				static if(!is(A == CAllocator))
-					assert(!allocator.isOwnerOf(memory));
-			}else assert(memory is null);
+		static if(hasCanAllocate!A){
+			assert(allocator.canAllocate(0));
 		}
+		memory = allocator.allocate(0);
+		assert(memory is null);
+		assert(!allocator.isOwnerOf(memory));
+		
 		if((){
 			static if(hasCanAllocate!A)
 				return allocator.canAllocate(1);
@@ -61,23 +54,33 @@ unittest{
 					auto oldMemory = memory;
 					allocator.reallocate(memory, 20);
 					if(memory.ptr != oldMemory.ptr){
-						static if(!is(A == CAllocator))
-							assert(!allocator.isOwnerOf(oldMemory));
+						assert(!allocator.isOwnerOf(oldMemory));
 					}
 					assert(memory.length == 20);
 				}
 			}
-			static if(hasExtend!A){
-				auto oldMemory = memory;
-				size_t oldSize = memory.length;
-				size_t sizeDelta = allocator.extend(memory, 1);
-				assert(memory.length == oldSize + sizeDelta);
-				assert(oldMemory.ptr == memory.ptr);
+			static if(hasResize!A){
+				void resize(size_t size){
+					auto oldMemory = memory;
+					size_t oldSize = memory.length;
+					size_t newSize = allocator.resize(memory, size);
+					assert(newSize == memory.length);
+					if(size > oldSize){
+						assert(newSize <= size);
+						assert(newSize >= oldSize);
+					}else{
+						assert(newSize <= oldSize);
+						assert(newSize >= (size > 0 ? size : 1));
+					}
+					assert(oldMemory.ptr == memory.ptr);
+					assert(allocator.isOwnerOf(memory));
+				}
+				resize(memory.length+2);
+				resize(0);
 			}
 			
 			allocator.deallocate(memory);
-			static if(!is(A == CAllocator))
-				assert(!allocator.isOwnerOf(memory));
+			assert(!allocator.isOwnerOf(memory));
 		}
 	}}
 }

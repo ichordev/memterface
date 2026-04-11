@@ -8,8 +8,6 @@ classes with `Classify`.
 */
 module memterface.wrap;
 
-import core.exception;
-import std.traits;
 import memterface.iface;
 
 /**
@@ -61,6 +59,9 @@ struct Wrapped(Allocator, bool unsafe=false){
 }
 
 private mixin template WrappedImpl(bool monostate){
+	import core.exception: onOutOfMemoryError;
+	import std.traits: hasFunctionAttributes;
+	
 	mixin((monostate ? "\tstatic:\n" : "") ~ q{
 	void[] allocateImpl()(size_t size) nothrow{
 		void[] memory;
@@ -111,19 +112,21 @@ private mixin template WrappedImpl(bool monostate){
 		(){ void[] bRef; return is(typeof(Allocator.expand(bRef, size_t.init)) == bool); }() &&
 		is(typeof(Allocator.expand)) && (unsafe || hasFunctionAttributes!(Allocator.expand, "nothrow"))
 	){
-		size_t extendImpl()(ref void[] memory, size_t sizeDelta) nothrow{
-			void[] fullMemory = restoreMemoryMagicNumber(memory);
-			size_t oldSize = fullMemory.length;
-			static if(hasFunctionAttributes!(Allocator.expand, "nothrow")){
-				phobosAllocator.expand(fullMemory, sizeDelta);
+		size_t resizeImpl()(ref void[] memory, size_t newSize) nothrow{
+			if(newSize <= memory.length){
+				import std.algorithm.comparison: max;
+				memory = memory[0..max(1, newSize)];
 			}else{
-				try phobosAllocator.expand(fullMemory, sizeDelta);
-				catch(Exception ex) assert(0, "`expand` threw an exception: "~ex.toString());
+				static if(hasFunctionAttributes!(Allocator.expand, "nothrow")){
+					phobosAllocator.expand(memory, newSize);
+				}else{
+					try phobosAllocator.expand(memory, newSize);
+					catch(Exception ex) assert(0, "`expand` threw an exception: "~ex.toString());
+				}
 			}
-			memory = fullMemory[magic.sizeof..$];
-			return fullMemory.length - oldSize;
+			return memory.length;
 		};
-		static assert(hasExtend!Wrapped);
+		static assert(hasResize!Wrapped);
 	}});
 }
 
@@ -135,8 +138,8 @@ unittest{
 	gc.reallocate(memory, 200);
 	{
 		size_t oldSize = memory.length;
-		size_t sizeDelta = gc.extend(memory, 10);
-		assert(memory.length == oldSize + sizeDelta);
+		size_t newSize = gc.resize(memory, 210);
+		assert(memory.length == newSize);
 	}
 	gc.deallocate(memory);
 	
@@ -185,9 +188,9 @@ safety by invalidating the original after it is copied.
 Params:
 	hashWithSelf = Makes `generateMagicNumber` use `this` as a hash compliment instead of
 		using a static variable. Doing this allows `generateMagicNumber` to be `pure`. Only set
-		this parameter to `true` if you are sure that the data of your allocator is enough to
-		distinguish it from other instances of itself (e.g. your allocator only contains a slice).
-		Otherwise, `isOwnerOf` may return `true` erroneously.
+		this parameter to `true` if you are sure that the data of your allocator at the time of its
+		construction is enough to distinguish it from other instances of itself (e.g. your allocator
+		only contains a slice). Otherwise, `isOwnerOf` may return `true` erroneously.
 */
 mixin template ImplementIsOwnerOf(bool hashWithSelf=false){
 	static assert(is(typeof(this) == struct) || is(typeof(this) == class), "`ImplementIsOwnerOf` must be used in a struct or a class");
@@ -199,11 +202,11 @@ mixin template ImplementIsOwnerOf(bool hashWithSelf=false){
 		__traits(isStaticFunction, allocateImpl) &&
 		__traits(isStaticFunction, deallocateImpl) &&
 		(!is(typeof(reallocateImpl)) || __traits(isStaticFunction, reallocateImpl)) &&
-		(!is(typeof(extendImpl)) || __traits(isStaticFunction, extendImpl)) &&
+		(!is(typeof(resizeImpl)) || __traits(isStaticFunction, resizeImpl)) &&
 		(!is(typeof(canAllocateImpl)) || __traits(isStaticFunction, canAllocateImpl))
 	){
 		enum size_t magic = object.hashOf(typeof(this).mangleof);
-		static bool isOwnerOf(const(void)[] memory) nothrow @nogc pure @safe =>
+		static bool isOwnerOf(const(void)[] memory) nothrow @nogc =>
 			memory !is null && magic == getMemoryMagicNumber(restoreMemoryMagicNumber(memory));
 	}else{
 		size_t magic;
@@ -218,7 +221,7 @@ mixin template ImplementIsOwnerOf(bool hashWithSelf=false){
 				magic = object.hashOf(n++, baseHash);
 			}
 		}
-		bool isOwnerOf(const(void)[] memory) const nothrow @nogc pure @safe =>
+		bool isOwnerOf(const(void)[] memory) const nothrow @nogc =>
 			memory !is null && magic == getMemoryMagicNumber(restoreMemoryMagicNumber(memory));
 	}
 	
@@ -226,13 +229,13 @@ mixin template ImplementIsOwnerOf(bool hashWithSelf=false){
 		static if(__traits(isStaticFunction, allocateImpl)){
 			static void[] _allocateTemplate()(size_t size) nothrow
 			out(memory; memory.length == size)
-			out(memory; (size == 0 && memory is null) || isOwnerOf(memory)) =>
-				truncateMemoryAndSetMagicNumber(allocateImpl(size+magic.sizeof), magic);
+			out(memory; size > 0 ? isOwnerOf(memory) : memory is null) =>
+				size > 0 ? truncateMemoryAndSetMagicNumber(allocateImpl(size+magic.sizeof), magic) : null;
 		}else{
 			void[] _allocateTemplate()(size_t size) nothrow
 			out(memory; memory.length == size)
-			out(memory; (size == 0 && memory is null) || isOwnerOf(memory)) =>
-				truncateMemoryAndSetMagicNumber(allocateImpl(size+magic.sizeof), magic);
+			out(memory; size > 0 ? isOwnerOf(memory) : memory is null) =>
+				size > 0 ? truncateMemoryAndSetMagicNumber(allocateImpl(size+magic.sizeof), magic) : null;
 		}
 		static if(__traits(isStaticFunction, deallocateImpl)){
 			static void _deallocateTemplate()(void[] memory) nothrow
@@ -253,17 +256,22 @@ mixin template ImplementIsOwnerOf(bool hashWithSelf=false){
 		static if(__traits(isStaticFunction, reallocateImpl)){
 			private static void _reallocateTemplate()(ref void[] memory, size_t newSize) nothrow
 			in(isOwnerOf(memory))
-			out(; (newSize == 0 && memory is null) || isOwnerOf(memory))
-			out(; memory.length == newSize){
+			out(; memory.length == newSize)
+			out(; newSize > 0 ? isOwnerOf(memory) : memory is null){
 				void[] fullMemory = restoreMemoryAndSetMagicNumber(memory, 0);
-				reallocateImpl(fullMemory, newSize+magic.sizeof);
-				memory = truncateMemoryAndSetMagicNumber(fullMemory, magic);
+				if(newSize > 0){
+					reallocateImpl(fullMemory, newSize+magic.sizeof);
+					memory = truncateMemoryAndSetMagicNumber(fullMemory, magic);
+				}else{
+					deallocateImpl(fullMemory);
+					memory = null;
+				}
 			}
 		}else{
 			private void _reallocateTemplate()(ref void[] memory, size_t newSize) nothrow
 			in(isOwnerOf(memory))
-			out(; (newSize == 0 && memory is null) || isOwnerOf(memory))
-			out(; memory.length == newSize){
+			out(; memory.length == newSize)
+			out(; newSize > 0 ? isOwnerOf(memory) : memory is null){
 				void[] fullMemory = restoreMemoryAndSetMagicNumber(memory, 0);
 				reallocateImpl(fullMemory, newSize+magic.sizeof);
 				memory = truncateMemoryAndSetMagicNumber(fullMemory, magic);
@@ -271,32 +279,36 @@ mixin template ImplementIsOwnerOf(bool hashWithSelf=false){
 		}
 		alias reallocate = _reallocateTemplate!();
 	}
-	static if(is(typeof(extendImpl))){
-		static if(__traits(isStaticFunction, extendImpl)){
-			private static size_t _extendTemplate()(ref void[] memory, size_t sizeDelta) nothrow
+	static if(is(typeof(resizeImpl))){
+		static if(__traits(isStaticFunction, resizeImpl)){
+			private static size_t _resizeTemplate()(ref void[] memory, size_t newSize) nothrow
 			in(isOwnerOf(memory))
-			out(returnedSizeDelta; returnedSizeDelta <= sizeDelta){
+			out(; isOwnerOf(memory))
+			out(retSize; retSize == memory.length){
 				void[] fullMemory = restoreMemoryMagicNumber(memory);
 				scope(exit) memory = fullMemory[magic.sizeof..$];
-				return extendImpl(fullMemory, sizeDelta);
+				return resizeImpl(fullMemory, newSize+magic.sizeof) - magic.sizeof;
 			}
 		}else{
-			private size_t _extendTemplate()(ref void[] memory, size_t sizeDelta) nothrow
+			private size_t _resizeTemplate()(ref void[] memory, size_t newSize) nothrow
 			in(isOwnerOf(memory))
-			out(returnedSizeDelta; returnedSizeDelta <= sizeDelta){
+			out(; isOwnerOf(memory))
+			out(retSize; retSize == memory.length){
 				void[] fullMemory = restoreMemoryMagicNumber(memory);
 				scope(exit) memory = fullMemory[magic.sizeof..$];
-				return extendImpl(fullMemory, sizeDelta);
+				return resizeImpl(fullMemory, newSize+magic.sizeof) - magic.sizeof;
 			}
 		}
-		alias extend = _extendTemplate!();
+		alias resize = _resizeTemplate!();
 	}
 	static if(is(typeof(canAllocateImpl))){
 		static if(__traits(isStaticFunction, canAllocateImpl)){
-			private static bool _canAllocateTemplate()(size_t size) nothrow =>
+			private static bool _canAllocateTemplate()(size_t size) nothrow
+			out(ret; size > 0 || ret) =>
 				canAllocateImpl(size+magic.sizeof);
 		}else{
-			private bool _canAllocateTemplate()(size_t size) const nothrow =>
+			private bool _canAllocateTemplate()(size_t size) const nothrow
+			out(ret; size > 0 || ret) =>
 				canAllocateImpl(size+magic.sizeof);
 		}
 		alias canAllocate = _canAllocateTemplate!();
@@ -304,11 +316,13 @@ mixin template ImplementIsOwnerOf(bool hashWithSelf=false){
 }
 
 pragma(inline,true){
-	inout(void)[] restoreMemoryMagicNumber(inout(void)[] memory) nothrow @nogc pure @trusted =>
+	inout(void)[] restoreMemoryMagicNumber(inout(void)[] memory) nothrow @nogc =>
 		(memory.ptr-size_t.sizeof)[0..memory.length+size_t.sizeof];
+	
 	size_t getMemoryMagicNumber(const(void)[] fullMemory) nothrow @nogc pure @trusted =>
 		*cast(const(size_t)*)fullMemory[0..size_t.sizeof];
-	void[] restoreMemoryAndSetMagicNumber(void[] memory, size_t magic) nothrow @nogc pure @trusted{
+	
+	void[] restoreMemoryAndSetMagicNumber(void[] memory, size_t magic) nothrow @nogc{
 		void[] fullMemory = (memory.ptr-size_t.sizeof)[0..memory.length+size_t.sizeof];
 		*cast(size_t*)fullMemory[0..size_t.sizeof] = magic;
 		return fullMemory;
@@ -319,54 +333,23 @@ pragma(inline,true){
 	}
 }
 
-//returns a number that's different each time the function is called
-/*private size_t getHashCompliment() nothrow @nogc @safe{
-	version(GNU_InlineAsm){
-		version(X86){
-			version = GNU_InlineAsm_X86;
-		}else version(X86_64){
-			version = GNU_InlineAsm_X86_64;
-		}
-	}
-	ulong ret = void;
-	version(D_InlineAsm_X86){
-		asm nothrow @nogc{
-			rdtsc;
-			mov ret,EAX;
-		}
-	}else version(D_InlineAsm_X86_64){
-		asm nothrow @nogc{
-			rdtsc;
-			shl RDX,32;
-			or RAX,RDX;
-			mov ret,RAX;
-		}
-	}else version(GNU_InlineAsm_X86){
-		asm nothrow @nogc{
-			"rdtsc" : "=a"(ret);
-		}
-	}else version(GNU_InlineAsm_X86_64){
-		asm nothrow @nogc{
-			"rdtsc";
-			"shl $32,%%rdx";
-			"or %%rdx,%%rax": "=a"(ret);
-		}
-	}else{
-		ret = (ret << 1) | (((ret>>>30) ^ (~ret>>>34)) & 1);
-	}
-	return cast(size_t)ret;
-}*/
-
 /**
 Creates a class that wraps an instance of `Allocator`.
 Can be used to pass DBI allocators to non-template functions that only accept `AllocatorInterface`.
 */
 class Classify(Allocator): AllocatorInterfacesFor!Allocator
 if(isAllocator!Allocator){
-	Allocator allocator;
-	
-	this()(auto ref Allocator allocator){
-		this.allocator = allocator;
+	static if(isGlobal!Allocator){
+		static Allocator allocator;
+		
+		this(){}
+		this(Allocator allocator){}
+	}else{
+		Allocator allocator;
+		
+		this()(auto ref Allocator allocator){
+			this.allocator = allocator;
+		}
 	}
 	
 	void[] allocate(size_t size) nothrow =>
@@ -382,12 +365,13 @@ if(isAllocator!Allocator){
 		void reallocate(ref void[] memory, size_t newSize) nothrow =>
 			allocator.reallocate(memory, newSize);
 	}
-	static if(hasExtend!Allocator){
-		size_t extend(ref void[] memory, size_t sizeDelta) nothrow =>
-			allocator.extend(memory, sizeDelta);
+	static if(hasResize!Allocator){
+		size_t resize(ref void[] memory, size_t newSize) nothrow =>
+			allocator.resize(memory, newSize);
 	}
 	static if(hasCanAllocate!Allocator){
-		bool canAllocate(size_t size) const nothrow =>
+		bool canAllocate(size_t size) const nothrow
+		out(ret; size > 0 || ret) =>
 			allocator.canAllocate(size);
 	}
 }

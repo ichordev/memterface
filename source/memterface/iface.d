@@ -69,24 +69,18 @@ interface AllocatorInterface{
 	Allocates at least the specified amount of memory (in bytes), and returns it as a slice.
 	The size of the returned slice must match the requested size, even if more memory was allocated internally.
 	
+	`allocate(0)` must always return `null`.
+	
 	The values in the memory pointed to by the returned slice are undefined. (i.e. do not have to be cleared in any way)
 	
 	Calling this function must always either succeed, or terminate the program (e.g. with `OutOfMemoryError`).
 	For allocators with a fixed amount of pre-allocated space, a fallback to another allocator is recommended.
 	Otherwise, the optional `canAllocate` function can be implemented. If `canAllocate(size)` would've returned
 	`false` but this function is called anyway, then it must throw an `OutOfMemoryError`.
-	
-	Zero-sized allocations must return zero-sized slices, which may or may not point to `null`.
-	`null` zero-sized slices are not owned by the allocator, and therefore cannot be `deallocate`d.
-	However, non-`null` zero-sized slices must point to valid readable/writeable memory, be unique
-	(i.e. `allocator.allocate(0).ptr != allocator.allocate(1).ptr`), and may cause memory leaks if not subsequently
-	`deallocate`d.
-	If an allocator allocates non-`null` zero-sized slices, it is best practice for it to fall back to return
-	`null` zero-sized slices if and when its state runs out of space for non-`null` zero-sized slices.
 	*/
 	void[] allocate(size_t size) nothrow
 	out(memory; memory.length == size)
-	out(memory; (size == 0 && memory is null) || isOwnerOf(memory));
+	out(memory; size > 0 ? isOwnerOf(memory) : memory is null);
 	
 	/**
 	Deallocates `memory`, after which it should be invalid for the caller to use it.
@@ -97,16 +91,19 @@ interface AllocatorInterface{
 	/**
 	Determines whether this allocator (including any of its fallbacks) owns the specified slice of memory.
 	
-	The allocator must return `true` when `memory`'s pointer and length are identical to a slice returned (or modified) by
-	`allocate`, `reallocate`, `extend`, and other functions that return/modify allocated slices, unless the slice was
-	reallocated, deallocated, or extended thereafter and thereby returned with (or modified to) a different pointer/length.
-	In other cases—for instance when `memory`'s length does not match what was returned, or if its pointer points to the
-	interior of a returned slice—this function **must** return `false`!
+	This function must return `true` when `memory`'s pointer and length are identical to a slice returned (or modified) by
+	the same allocator's  `allocate`, `reallocate`, `resize`, etc. functions that return/modify allocated slices, unless the
+	slice was reallocated/deallocated/resized/etc. thereafter and thereby returned with (or modified to) having a different pointer/length.
+	Otherwise, when `memory` points to the interior of a returned slice, or  `memory`'s length is not
+	what was returned by the allocator, then this function should return `false`.
+	In generic code, care should be taken to avoid passing interior slices to allocator functions in the first place.
+	
+	`isOwnerOf(null)` must return `false`, since no allocator owns `null`.
 	
 	Must return `false` when `memory` points to memory owned by the allocator that has not yet allocated by
 	the user (e.g. via `allocate`), or has been deallocated.
 	
-	Calling this function must never fail except for assertion failures and breach of contracts.
+	Calling this function must never fail, except for errors such as assertion failures.
 	
 	When creating a wrapper over a pre-existing allocator that makes it absolutely impossible to determine if the
 	allocator allocated a pointer (e.g. malloc) then this function may be implemented using
@@ -121,8 +118,10 @@ interface AllocatorInterfaceWithReallocate: AllocatorInterface{
 	/**
 	Reallocates `memory`, making it `newSize` bytes large.
 	
-	The allocator may extend `memory` in-place where possible. Otherwise, the value of `memory` before calling this
-	function will become invalid, and must cause `isOwnerOf(oldMemory)` to return `false`.
+	The allocator may shorten/extend `memory` in-place where possible. Otherwise, the value of `memory` before
+	calling this function will become invalid, and must cause `isOwnerOf(oldMemory)` to return `false`.
+	
+	If `newSize == 0`, then this function must deallocate `memory` and assign it to be `null`.
 	
 	Calling this function must always either succeed, or terminate the program (e.g. with `OutOfMemoryError`).
 	For allocators with a fixed amount of pre-allocated space, a fallback to another allocator is recommended.
@@ -139,30 +138,34 @@ interface AllocatorInterfaceWithReallocate: AllocatorInterface{
 	*/
 	void reallocate(ref void[] memory, size_t newSize) nothrow
 	in(isOwnerOf(memory))
-	out(; (newSize == 0 && memory is null) || isOwnerOf(memory))
-	out(; memory.length == newSize);
+	out(; memory.length == newSize)
+	out(; newSize > 0 ? isOwnerOf(memory) : memory is null);
 }
 
-///An optional extension for extending allocated memory in-place.
-interface AllocatorInterfaceWithExtend: AllocatorInterface{
+///An optional extension for resizing an allocated memory block in-place.
+interface AllocatorInterfaceWithResize: AllocatorInterface{
 	/**
-	Attempts to extend `memory` in-place by up to `sizeDelta` bytes.
+	Attempts to shorten/extend `memory` in-place to be `newSize` bytes.
+	The function is allowed to shorten/extend `memory` by less than the amount
+	requested, but not by more. However, it must only shrink memory to be a
+	minimum of 1 byte in size when `newSize == 0`.
 	
 	Must not modify the pointer in `memory`. If `memory` was valid when calling this
 	function, then it must remain valid afterwards.
 	
-	Returns: The number of bytes added to `memory`. `0` indicates that no space could be
-		added, i.e. the function call failed.
+	Returns: The new size of `memory`.
 	*/
-	size_t extend(ref void[] memory, size_t sizeDelta) nothrow
+	size_t resize(ref void[] memory, size_t newSize) nothrow
 	in(isOwnerOf(memory))
-	out(returnedSizeDelta; returnedSizeDelta <= sizeDelta);
+	out(; isOwnerOf(memory))
+	out(retSize; retSize == memory.length);
 }
 
 ///An optional extension for checking when `allocate` (and `reallocate` if applicable) will fail.
 interface AllocatorInterfaceWithCanAllocate: AllocatorInterface{
 	/**
 	Determines whether `size` bytes can be allocated with the current allocator state.
+	`canAllocate(0)` must always return `true`.
 	
 	If the allocator's state changes in any way, then any value previously returned by `canAllocate` no longer applies:
 	```
@@ -180,7 +183,8 @@ interface AllocatorInterfaceWithCanAllocate: AllocatorInterface{
 		to call `allocate(size)`, or `reallocate(someMemory, size)` (if implemented),
 		otherwise `false`.
 	*/
-	bool canAllocate(size_t size) const nothrow;
+	bool canAllocate(size_t size) const nothrow
+	/+out(ret; size > 0 || ret)+/;
 }
 
 ///Returns: `true` if `T` is an allocator with at least an allocate & deallocate function.
@@ -197,12 +201,12 @@ if(isAllocator!A){
 		(){ void[] memoryRef; return is(typeof(A.reallocate(memory: memoryRef, newSize: size_t())) == void); }() && is(typeof(A.reallocate)) &&
 		hasFunctionAttributes!(A.reallocate, "nothrow");
 }
-///Returns: `true` if `A` implements the optional `AllocatorInterfaceWithExtend` API extension.
-template hasExtend(A)
+///Returns: `true` if `A` implements the optional `AllocatorInterfaceWithResize` API extension.
+template hasResize(A)
 if(isAllocator!A){
-	enum hasExtend =
-		(){ void[] memoryRef; return is(typeof(A.extend(memory: memoryRef, sizeDelta: size_t())) == size_t); }() && is(typeof(A.extend)) &&
-		hasFunctionAttributes!(A.extend, "nothrow");
+	enum hasResize =
+		(){ void[] memoryRef; return is(typeof(A.resize(memory: memoryRef, newSize: size_t())) == size_t); }() && is(typeof(A.resize)) &&
+		hasFunctionAttributes!(A.resize, "nothrow");
 }
 ///Returns: `true` if `A` implements the optional `AllocatorInterfaceWithCanAllocate` API extension.
 template hasCanAllocate(A)
@@ -219,7 +223,7 @@ if(isAllocator!A){
 	import std.meta: AliasSeq;
 	alias AllocatorInterfacesFor = AliasSeq!(AllocatorInterface);
 	static if(hasReallocate!A)  AllocatorInterfacesFor = AliasSeq!(AllocatorInterfacesFor, AllocatorInterfaceWithReallocate);
-	static if(hasExtend!A)      AllocatorInterfacesFor = AliasSeq!(AllocatorInterfacesFor, AllocatorInterfaceWithExtend);
+	static if(hasResize!A)      AllocatorInterfacesFor = AliasSeq!(AllocatorInterfacesFor, AllocatorInterfaceWithResize);
 	static if(hasCanAllocate!A) AllocatorInterfacesFor = AliasSeq!(AllocatorInterfacesFor, AllocatorInterfaceWithCanAllocate);
 }
 
@@ -235,7 +239,7 @@ if(isAllocator!A){
 		__traits(isStaticFunction, A.deallocate) &&
 		__traits(isStaticFunction, A.isOwnerOf) &&
 		(hasReallocate!A ? is(typeof(A.reallocate)) && __traits(isStaticFunction, A.reallocate) : true) &&
-		(hasExtend!A ? is(typeof(A.extend)) && __traits(isStaticFunction, A.extend) : true) &&
+		(hasResize!A ? is(typeof(A.resize)) && __traits(isStaticFunction, A.resize) : true) &&
 		(hasCanAllocate!A ? is(typeof(A.canAllocate)) && __traits(isStaticFunction, A.canAllocate) : true);
 }
 /**
@@ -250,6 +254,6 @@ if(isAllocator!A){
 		hasFunctionAttributes!(A.deallocate, "pure") &&
 		hasFunctionAttributes!(A.isOwnerOf, "pure") &&
 		(hasReallocate!A ? is(typeof(A.reallocate)) && hasFunctionAttributes!(A.reallocate, "pure") : true) &&
-		(hasExtend!A ? is(typeof(A.extend)) && hasFunctionAttributes!(A.extend, "pure") : true) &&
+		(hasResize!A ? is(typeof(A.resize)) && hasFunctionAttributes!(A.resize, "pure") : true) &&
 		(hasCanAllocate!A ? is(typeof(A.canAllocate)) && hasFunctionAttributes!(A.canAllocate, "pure") : true);
 }

@@ -1,17 +1,14 @@
-/+
-+               Copyright 2025 Aya Partridge
-+ Distributed under the Boost Software License, Version 1.0.
-+     (See accompanying file LICENSE_1_0.txt or copy at
-+           http://www.boost.org/LICENSE_1_0.txt)
-+/
 /**
+Copyright: Copyright 2025–2026 Aya Partridge
+License: Distributed under the terms of the GNU Lesser General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See the accompanying `COPYING.LESSER.md` file or go to <https://www.gnu.org/licenses/> for more details.
+
 Functions to automatically allocate memory and construct/initialise a data type into it.
 */
 module memterface.ctor;
 
 import core.builtins: unlikely;
-import core.lifetime;
-import std.algorithm.comparison, std.traits;
+import core.lifetime: emplace, forward, moveEmplace;
+import std.algorithm.comparison: min;
 import memterface.iface;
 
 /**
@@ -21,7 +18,7 @@ allocate `desiredSize + alignment` bytes of mmeory to pass to this function.
 
 Since this function only returns a sub-slice of `memory`, you cannot reliably call the original
 allocator's deallocate/reallocate/etc. functions with the returned sub-slice.
-Instead, you can call `removeAlignment(subSlice, alignment)` and pass its return value to the
+Rather, you must call `removeAlignment(subSlice, alignment)` and pass its return value to the
 allocator instead.
 
 See_Also: `removeAlignment`
@@ -34,16 +31,16 @@ in(memory.length >= alignment){
 	*(() @trusted => cast(ubyte*)memory[metaInd..startInd])() = metaInd; //write the start index as a byte of metadata
 	return memory[startInd..$-(alignment - startInd)];
 }
-nothrow @nogc pure @safe unittest{
+nothrow pure @safe unittest{
 	import memterface.allocator;
 	enum alignment = 256;
 	foreach(_; 0..100){
-		void[] m = CAllocator().allocate(12 + alignment);
+		void[] m = GCAllocator().allocate(12 + alignment);
 		void[] aligned = forceAlignment(m, alignment);
 		assert(aligned.length == 12);
 		assert(cast(size_t)aligned.ptr % alignment == 0);
 	}
-	void[] m = CAllocator().allocate(12 + alignment + alignment);
+	void[] m = GCAllocator().allocate(12 + alignment + alignment);
 	void[] aligned = forceAlignment(m, alignment);
 	void[] alignedTwice = forceAlignment(aligned, alignment);
 	assert(alignedTwice !is aligned);
@@ -63,7 +60,7 @@ Params:
 
 See_Also: `forceAlignment`
 */
-void[] removeAlignment(return scope void[] alignedMemory, size_t alignment) nothrow @nogc pure
+void[] removeAlignment(return scope void[] alignedMemory, size_t alignment) nothrow @nogc @system
 in(alignment >= 1 && alignment <= 256)
 in(alignedMemory !is null)
 out(memory; memory.length == alignedMemory.length + alignment){
@@ -72,7 +69,7 @@ out(memory; memory.length == alignedMemory.length + alignment){
 	const start = meta + ubyte.sizeof;
 	return (alignedMemory.ptr - start)[0..alignedMemory.length + alignment];
 }
-nothrow @nogc pure unittest{
+nothrow @nogc unittest{
 	import memterface.allocator;
 	enum alignment = 256;
 	void[] m = CAllocator().allocate(12 + alignment);
@@ -132,15 +129,15 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(F == typeo
 auto initNew(T, F)(return scope AllocatorInterface allocator, scope F onFail=null)
 if(is(F == typeof(null)) || is(typeof(onFail()): typeof(initNewImpl!T([])))){
 	static if(!is(F == typeof(null))){
-		if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
-			if(unlikely(!allocWCanAlloc.canAllocate(sizeInMemory!T))) return onFail();
+		if(auto allocCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
+			if(unlikely(!allocCanAlloc.canAllocate(sizeInMemory!T))) return onFail();
 		}
 	}
 	return initNewImpl!T(allocator.allocate(sizeInMemory!T));
 }
-nothrow @nogc pure @safe unittest{
+nothrow pure @safe unittest{
 	import memterface.allocator;
-	int* i = CAllocator().initNew!int();
+	int* i = GCAllocator().initNew!int();
 	assert(*i == 0);
 	assert(BottomAllocator().initNew!int(() => null) is null);
 }
@@ -184,8 +181,8 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(F == typeo
 auto constructNew(T, F, Args...)(return scope AllocatorInterface allocator, auto ref Args args, scope F onFail=null)
 if(is(F == typeof(null)) || is(typeof(onFail()): typeof(initNewImpl!T([])))){
 	static if(!is(F == typeof(null))){
-		if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
-			if(unlikely(!allocWCanAlloc.canAllocate(sizeInMemory!T))) return false;
+		if(auto allocCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
+			if(unlikely(!allocCanAlloc.canAllocate(sizeInMemory!T))) return false;
 		}
 	}
 	return constructNewImpl!((void[] memory) => emplace!T((() @trusted => cast(RefOf!T)memory.ptr)(), forward!args), T, AllocatorInterface)(allocator);
@@ -207,6 +204,7 @@ private size_t getArraySize(T)(size_t length) nothrow @nogc pure @safe{
 
 pragma(inline,true)
 private T[] initArray(T)(return scope void[] array) nothrow @nogc pure @trusted{
+	import std.traits: Unqual;
 	alias U = Unqual!T;
 	if(array.length){
 		static if(__traits(isZeroInit, T)){ //types with only 00 bytes
@@ -265,15 +263,15 @@ T[] newArray(T, F)(return scope AllocatorInterface allocator, size_t length, sco
 if(is(F == typeof(null)) || is(typeof(onFail()): T[])){
 	const size = getArraySize!T(length);
 	static if(!is(F == typeof(null))){
-		if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
-			if(unlikely(!allocWCanAlloc.canAllocate(size))) return onFail();
+		if(auto allocCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
+			if(unlikely(!allocCanAlloc.canAllocate(size))) return onFail();
 		}
 	}
 	return initArray!T(allocator.allocate(size));
 }
-nothrow @nogc pure @safe unittest{
+nothrow pure @safe unittest{
 	import memterface.allocator;
-	int[] a = CAllocator().newArray!int(10);
+	int[] a = GCAllocator().newArray!int(10);
 	foreach(ref item; a)
 		assert(item == 0);
 	assert(BottomAllocator().newArray!int(1, () => null) is null);
@@ -288,8 +286,6 @@ The optional callback `onFail` may be passed, which will be called if `allocator
 
 New elements are default-initialised. Removed elements get destroyed appropriately.
 
-Note: Copy constructors are not called.
-
 Returns: `true`; or the result of `onFail` (if passed) when allocation fails.
 */
 bool resizeArray(bool runDestructors=true, Allocator, T, F)(
@@ -298,30 +294,33 @@ bool resizeArray(bool runDestructors=true, Allocator, T, F)(
 	const oldLength = array.length;
 	if(newLength != oldLength){
 		if(array !is null){
+			static if(runDestructors){
+				if(newLength < oldLength){
+					foreach(ref item; array[newLength..$])
+						destroy!false(item);
+				}
+			}
 			const arraySize = getArraySize!T(newLength);
 			static if(!is(F == typeof(null)) && hasCanAllocate!Allocator){
 				if(unlikely(!allocator.canAllocate(arraySize))) return cast(bool)onFail();
 			}
-			scope(exit){
-				static if(hasReallocate!Allocator){
-					void[] memory = array;
-					allocator.reallocate(memory, arraySize);
-				}else{
-					void[] oldMemory = array;
-					void[] memory = allocator.allocate(arraySize);
-					memory[0..oldMemory.length] = oldMemory[];
-					allocator.deallocate(oldMemory);
-				}
-				array = (() @trusted => cast(T[])memory)();
-				if(newLength > oldLength)
-					cast(void)initArray!T(array[oldLength..$]);
+			
+			static if(hasResize!Allocator){
+				void[] voidArray = array;
+				bool doRealloc = allocator.resize(voidArray, arraySize) != arraySize;
+				array = cast(T[])voidArray;
+			}else{
+				enum doRealloc = true;
 			}
-			static if(runDestructors && is(typeof(doDestroy(array[0])))){
-				if(newLength < oldLength){
-					foreach(ref item; array[newLength..$])
-						doDestroy(item);
-				}
+			if(doRealloc){
+				auto newArray = ((memory) @trusted => cast(T[])memory)(allocator.allocate(arraySize));
+				foreach(i, ref item; array[0..min(newArray.length, $)])
+					moveEmplace(item, newArray[i]);
+				allocator.deallocate(array);
+				array = newArray;
 			}
+			if(newLength > oldLength)
+				cast(void)initArray!T(array[oldLength..$]);
 		}else{
 			array = newArray!(T, Allocator)(allocator, newLength);
 		}
@@ -335,33 +334,36 @@ bool resizeArray(bool runDestructors=true, T, F)(
 	const oldLength = array.length;
 	if(newLength != oldLength){
 		if(array !is null){
-			const arraySize = getArraySize!T(newLength);
-			static if(!is(F == typeof(null))){
-				if(auto allocWCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
-					if(unlikely(!allocWCanAlloc.canAllocate(arraySize))) return cast(bool)onFail();
-				}
-			}
-			scope(exit){
-				void[] memory;
-				if(auto allocWRealloc = cast(AllocatorInterfaceWithReallocate)allocator){
-					memory = array;
-					allocWRealloc.reallocate(memory, arraySize);
-				}else{
-					void[] oldMemory = array;
-					memory = allocator.allocate(arraySize);
-					memory[0..oldMemory.length] = oldMemory[];
-					allocator.deallocate(oldMemory);
-				}
-				array = (() @trusted => cast(T[])memory)();
-				if(newLength > oldLength)
-					cast(void)initArray!T(array[oldLength..$]);
-			}
-			static if(runDestructors && is(typeof(doDestroy(array[0])))){
+			static if(runDestructors){
 				if(newLength < oldLength){
 					foreach(ref item; array[newLength..$])
-						doDestroy(item);
+						destroy!false(item);
 				}
 			}
+			const arraySize = getArraySize!T(newLength);
+			static if(!is(F == typeof(null))){
+				if(auto allocCanAlloc = cast(AllocatorInterfaceWithCanAllocate)allocator){
+					if(unlikely(!allocCanAlloc.canAllocate(arraySize))) return cast(bool)onFail();
+				}
+			}
+			bool doRealloc = true;
+			{
+				auto allocResize = cast(AllocatorInterfaceWithResize)allocator;
+				if(unlikely(allocResize !is null)){
+					void[] voidArray = array;
+					doRealloc = allocator.resize(voidArray, arraySize) != arraySize;
+					array = cast(T[])voidArray;
+				}
+			}
+			if(doRealloc){
+				auto newArray = ((memory) @trusted => cast(T[])memory)(allocator.allocate(arraySize));
+				foreach(i, ref item; array[0..min(newArray.length, $)])
+					moveEmplace(item, newArray[i]);
+				allocator.deallocate(array);
+				array = newArray;
+			}
+			if(newLength > oldLength)
+				cast(void)initArray!T(array[oldLength..$]);
 		}else{
 			array = newArray!T(allocator, newLength);
 		}
@@ -376,26 +378,11 @@ pure unittest{
 		int i;
 		~this() pure{ throw new DestructorException("Destructor called!"); }
 	}
-	X[] a = CAllocator().newArray!X(10);
-	assert(CAllocator().resizeArray(a, 20) == true);
+	X[] a = GCAllocator().newArray!X(10);
+	assert(GCAllocator().resizeArray(a, 20) == true);
 	foreach(ref item; a)
 		assert(item.i == 0);
-	assertThrown!DestructorException(CAllocator().resizeArray(a, 19));
-}
-
-private void doDestroy(T)(ref T ptr){
-	static if(hasElaborateDestructor!T || is(T == class) || is(T == interface)){
-		destroy(ptr);
-	}else static assert(0);
-}
-nothrow @nogc pure @safe unittest{
-	static struct X1{}
-	static struct X2{ ~this(){} }
-	static class X3{}
-	X1 x1; X2 x2; X3 x3;
-	static assert(!is(typeof(doDestroy(x1))));
-	static assert(is(typeof(doDestroy(x2))));
-	static assert(is(typeof(doDestroy(x3))));
+	assertThrown!DestructorException(GCAllocator().resizeArray(a, 19));
 }
 
 /**
@@ -407,16 +394,16 @@ Similar to `dispose` from `std.experimental.allocator`.
 */
 void dispose(bool runDestructors=true, Allocator, T)(scope auto ref Allocator allocator, scope auto ref T* ptr)
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	static if(runDestructors && is(typeof(doDestroy(*ptr))))
-		doDestroy(ptr);
+	static if(runDestructors)
+		destroy!false(ptr);
 	allocator.deallocate((() @trusted => ptr[0..1])());
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
 ///Ditto
 void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T* ptr){
-	static if(runDestructors && is(typeof(doDestroy(*ptr))))
-		doDestroy(ptr);
+	static if(runDestructors)
+		destroy!false(ptr);
 	allocator.deallocate((() @trusted => ptr[0..1])());
 	static if(__traits(isRef, ptr))
 		ptr = null;
@@ -442,7 +429,7 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(T == class
 	void[] memory = (cast(void*)object)[0..typeID.initializer.length];
 	memory = removeAlignment(memory, typeID.talign);
 	static if(runDestructors)
-		destroy(ptr);
+		destroy!false(ptr);
 	allocator.deallocate(memory);
 	static if(__traits(isRef, ptr))
 		ptr = null;
@@ -458,7 +445,7 @@ if(is(T == class) || is(T == interface)){
 	void[] memory = (cast(void*)object)[0..typeID.initializer.length];
 	memory = removeAlignment(memory, typeID.talign);
 	static if(runDestructors)
-		destroy(ptr);
+		destroy!false(ptr);
 	allocator.deallocate(memory);
 	static if(__traits(isRef, ptr))
 		ptr = null;
@@ -476,9 +463,9 @@ Similar to `dispose` from `std.experimental.allocator`.
 */
 void dispose(bool runDestructors=true, Allocator, T)(scope auto ref Allocator allocator, scope auto ref T[] array)
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	static if(runDestructors && is(typeof(doDestroy(array[0])))){
+	static if(runDestructors){
 		foreach(ref item; array)
-			doDestroy(item);
+			destroy!false(item);
 	}
 	allocator.deallocate(array);
 	static if(__traits(isRef, array))
@@ -486,9 +473,9 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 }
 ///Ditto
 void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T[] array){
-	static if(runDestructors && is(typeof(doDestroy(array[0])))){
+	static if(runDestructors){
 		foreach(ref item; array)
-			doDestroy(item);
+			destroy!false(item);
 	}
 	allocator.deallocate(array);
 	static if(__traits(isRef, array))
