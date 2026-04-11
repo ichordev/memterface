@@ -7,6 +7,7 @@ module memterface.allocator;
 public import
 	memterface.allocator.bottom,
 	memterface.allocator.gc,
+	memterface.allocator.kernel,
 	memterface.allocator.malloc;
 
 unittest{
@@ -14,7 +15,10 @@ unittest{
 	import memterface.iface, memterface.wrap;
 	
 	static foreach(Allocator; AliasSeq!(
-		GCAllocator, CAllocator, BottomAllocator,
+		BottomAllocator,
+		GCAllocator,
+		KernelVirtualAllocator,
+		CAllocator,
 		(){
 			import std.experimental.allocator.building_blocks.kernighan_ritchie;
 			import std.experimental.allocator.gc_allocator: GCA = GCAllocator;
