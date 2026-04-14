@@ -10,28 +10,24 @@ public import
 	memterface.allocator.kernel,
 	memterface.allocator.malloc;
 
-unittest{
+nothrow unittest{
 	import std.meta: AliasSeq;
 	import memterface.iface, memterface.wrap;
 	
-	static foreach(Allocator; AliasSeq!(
-		BottomAllocator,
-		GCAllocator,
-		KernelVirtualAllocator,
-		CAllocator,
+	static foreach(getAllocator; AliasSeq!(
+		() => BottomAllocator(),
+		() => GCAllocator(),
+		() => KernelVirtualAllocator(),
+		() => CAllocator(),
 		(){
 			import std.experimental.allocator.building_blocks.kernighan_ritchie;
 			import std.experimental.allocator.gc_allocator: GCA = GCAllocator;
 			return Wrapped!(KRRegion!GCA)(KRRegion!GCA(128));
 		},
 	)){{
-		static if(is(Allocator)){
-			alias A = Allocator;
-			alias allocator = A;
-		}else{
-			alias A = typeof(Allocator());
-			A allocator = Allocator();
-		}
+		alias A = typeof(getAllocator());
+		auto allocator = getAllocator();
+		
 		void[] memory = void;
 		static if(hasCanAllocate!A){
 			assert(allocator.canAllocate(0));
@@ -48,6 +44,7 @@ unittest{
 			memory = allocator.allocate(1);
 			assert(memory.length == 1);
 			assert(allocator.isOwnerOf(memory));
+			assert(!allocator.isOwnerOf((memory.ptr-1)[0..1]));
 			
 			static if(hasReallocate!A){
 				if((){
@@ -57,7 +54,7 @@ unittest{
 				}()){
 					auto oldMemory = memory;
 					allocator.reallocate(memory, 20);
-					if(memory.ptr != oldMemory.ptr){
+					if(memory.ptr !is oldMemory.ptr){
 						assert(!allocator.isOwnerOf(oldMemory));
 					}
 					assert(memory.length == 20);
@@ -82,6 +79,28 @@ unittest{
 				resize(memory.length+2);
 				resize(0);
 			}
+			
+			allocator.deallocate(memory);
+			assert(!allocator.isOwnerOf(memory));
+		}
+	}}
+	static foreach(getAllocator; AliasSeq!(
+		() => BottomAllocator(),
+		() => GCAllocator(),
+		() => KernelVirtualAllocator(),
+	)){{
+		alias A = typeof(getAllocator());
+		auto allocator = getAllocator();
+		
+		enum gibibyte = 1024 * 1024 * 1024;
+		if((){
+			static if(hasCanAllocate!A)
+				return allocator.canAllocate(gibibyte);
+			else return true;
+		}()){
+			auto memory = allocator.allocate(gibibyte);
+			assert(memory.length == gibibyte);
+			assert(allocator.isOwnerOf(memory));
 			
 			allocator.deallocate(memory);
 			assert(!allocator.isOwnerOf(memory));

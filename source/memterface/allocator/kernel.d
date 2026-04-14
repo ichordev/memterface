@@ -21,7 +21,7 @@ struct KernelVirtualAllocator{
 				switch((() @trusted => mach_vm_allocate(mach_task_self(), &address, size, VM_FLAGS_ANYWHERE))()){
 					case KERN_SUCCESS:
 						return (() @trusted => (cast(void*)address)[0..size])();
-					default:  //all other errors
+					default: //all other errors
 						onOutOfMemoryError();
 					case KERN_INVALID_ARGUMENT: //should only happen if a bad argument is supplied, which would be our mistake
 						assert(0, "Implementation error");
@@ -34,7 +34,17 @@ struct KernelVirtualAllocator{
 					onOutOfMemoryError();
 				}
 			}else version(Windows){
-				assert(0, "Unimplemented");
+				auto ptr = (() @trusted => VirtualAlloc(null, size, MEM_COMMIT, PAGE_READWRITE))();
+				if(ptr !is null){
+					
+				}else{
+					version(assert){
+						import core.sys.windows.winerror: ERROR_OUTOFMEMORY;
+						 import core.sys.windows.winbase: GetLastError;
+						assert(GetLastError() == ERROR_OUTOFMEMORY);
+					}
+					onOutOfMemoryError();
+				}
 			}else{
 				assert(0, "Unimplemented");
 			}
@@ -52,7 +62,8 @@ struct KernelVirtualAllocator{
 			const err = munmap(memory.ptr, memory.length);
 			assert(err == 0);
 		}else version(Windows){
-			assert(0, "Unimplemented");
+			const success = VirtualFree(memory.ptr, 0, MEM_RELEASE);
+			assert(success);
 		}else{
 			assert(0, "Unimplemented");
 		}
@@ -61,16 +72,31 @@ struct KernelVirtualAllocator{
 	static bool isOwnerOf(const(void)[] memory) nothrow @nogc @safe{
 		if(memory.length > 0){
 			version(Apple){
-				auto address = (() @trusted => cast(mach_vm_address_t)memory.ptr)();
-				mach_vm_size_t size;
-				vm_region_basic_info_64 info;
-				mach_msg_type_number_t infoCnt=VM_REGION_BASIC_INFO_COUNT_64;
-				mach_port_t name;
+				const memorySize = mach_vm_size_t(memory.length);
 				
-				return (() @trusted =>
-					mach_vm_region(mach_task_self(), &address, &size, VM_REGION_BASIC_INFO_64, cast(vm_region_info_t)&info, &infoCnt, &name) == KERN_SUCCESS &&
-					address is cast(mach_vm_address_t)memory.ptr)() &&
-					size >= mach_vm_size_t(memory.length);
+				auto inAddress = (() @trusted => cast(mach_vm_address_t)memory.ptr)();
+				mach_vm_size_t totalSize = 0, size = void;
+				vm_region_basic_info_64 info = void;
+				mach_port_t name = void;
+				
+				do{
+					auto inOutAddress = inAddress;
+					mach_msg_type_number_t infoCnt = VM_REGION_BASIC_INFO_COUNT_64;
+					if(
+						(() @trusted => mach_vm_region(
+							mach_task_self(), &inOutAddress, &size,
+							VM_REGION_BASIC_INFO_64, cast(vm_region_info_t)&info, &infoCnt, &name,
+						))() == KERN_SUCCESS &&
+						inOutAddress == inAddress
+					){
+						totalSize += size;
+						inAddress += size;
+					}else{
+						return false;
+					}
+				}while(totalSize < memorySize);
+				return true;
+				
 			}else version(Supported_POSIX){
 				import core.stdc.errno: errno;
 				import core.sys.posix.unistd: _SC_PAGESIZE, sysconf;
@@ -132,7 +158,14 @@ struct KernelVirtualAllocator{
 					offset == off_t(0) &&
 					contiguousLength == memory.length;
 			}+/else version(Windows){
-				assert(0, "Unimplemented");
+				MEMORY_BASIC_INFORMATION info;
+				const infoByteCount = (() @trusted => VirtualQuery(memory.ptr, &info, info.sizeof))();
+				assert(infoByteCount);
+				
+				return
+					info.AllocationBase == &memory[0] &&
+					info.RegionSize >= memory.length &&
+					info.State == MEM_COMMIT;
 			}else{
 				assert(0, "Unimplemented");
 			}
@@ -220,6 +253,7 @@ private{
 			import core.sys.posix.sys.mman: MAP_ANON, MAP_FAILED, MAP_PRIVATE, PROT_READ, PROT_WRITE, mmap, munmap;
 		}
 	}else version(Windows){
-		
+		 import core.sys.windows.winnt: MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE;
+		 import core.sys.windows.winbase: VirtualAlloc, VirtualFree, VirtualQuery;
 	}
 }

@@ -320,7 +320,7 @@ pragma(inline,true){
 		(memory.ptr-size_t.sizeof)[0..memory.length+size_t.sizeof];
 	
 	size_t getMemoryMagicNumber(const(void)[] fullMemory) nothrow @nogc pure @trusted =>
-		*cast(const(size_t)*)fullMemory[0..size_t.sizeof];
+		*cast(const(size_t)*)fullMemory[0..size_t.sizeof]; //TODO: stop this from sometimes segfaulting by accessing unallocated memory when checking isOwnerOf on invalid/deallocated memory :(
 	
 	void[] restoreMemoryAndSetMagicNumber(void[] memory, size_t magic) nothrow @nogc{
 		void[] fullMemory = (memory.ptr-size_t.sizeof)[0..memory.length+size_t.sizeof];
