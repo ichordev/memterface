@@ -31,6 +31,7 @@ in(memory.length >= alignment){
 	*(() @trusted => cast(ubyte*)memory[metaInd..startInd])() = metaInd; //write the start index as a byte of metadata
 	return memory[startInd..$-(alignment - startInd)];
 }
+///
 nothrow pure @safe unittest{
 	import memterface.allocator;
 	enum alignment = 256;
@@ -69,6 +70,7 @@ out(memory; memory.length == alignedMemory.length + alignment){
 	const start = meta + ubyte.sizeof;
 	return (alignedMemory.ptr - start)[0..alignedMemory.length + alignment];
 }
+///
 nothrow @nogc unittest{
 	import memterface.allocator;
 	enum alignment = 256;
@@ -125,7 +127,7 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(F == typeo
 	}
 	return initNewImpl!T(allocator.allocate(sizeInMemory!T));
 }
-///Ditto
+///ditto
 auto initNew(T, F)(return scope AllocatorInterface allocator, scope F onFail=null)
 if(is(F == typeof(null)) || is(typeof(onFail()): typeof(initNewImpl!T([])))){
 	static if(!is(F == typeof(null))){
@@ -135,6 +137,7 @@ if(is(F == typeof(null)) || is(typeof(onFail()): typeof(initNewImpl!T([])))){
 	}
 	return initNewImpl!T(allocator.allocate(sizeInMemory!T));
 }
+///
 nothrow pure @safe unittest{
 	import memterface.allocator;
 	int* i = GCAllocator().initNew!int();
@@ -177,7 +180,7 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(F == typeo
 	}
 	return constructNewImpl!((void[] memory) => emplace!T((() @trusted => cast(RefOf!T)memory.ptr)(), forward!args), T, Allocator)(allocator);
 }
-///Ditto
+///ditto
 auto constructNew(T, F, Args...)(return scope AllocatorInterface allocator, auto ref Args args, scope F onFail=null)
 if(is(F == typeof(null)) || is(typeof(onFail()): typeof(initNewImpl!T([])))){
 	static if(!is(F == typeof(null))){
@@ -258,7 +261,7 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(F == typeo
 	}
 	return initArray!T(allocator.allocate(size));
 }
-///Ditto
+///ditto
 T[] newArray(T, F)(return scope AllocatorInterface allocator, size_t length, scope F onFail=null)
 if(is(F == typeof(null)) || is(typeof(onFail()): T[])){
 	const size = getArraySize!T(length);
@@ -269,6 +272,7 @@ if(is(F == typeof(null)) || is(typeof(onFail()): T[])){
 	}
 	return initArray!T(allocator.allocate(size));
 }
+///
 nothrow pure @safe unittest{
 	import memterface.allocator;
 	int[] a = GCAllocator().newArray!int(10);
@@ -294,7 +298,7 @@ bool resizeArray(bool runDestructors=true, Allocator, T, F)(
 	const oldLength = array.length;
 	if(newLength != oldLength){
 		if(array !is null){
-			static if(runDestructors){
+			static if(runDestructors && (is(T == struct) || is(T == class) || is(T == interface))){
 				if(newLength < oldLength){
 					foreach(ref item; array[newLength..$])
 						destroy!false(item);
@@ -327,14 +331,14 @@ bool resizeArray(bool runDestructors=true, Allocator, T, F)(
 	}
 	return true;
 }
-///Ditto
+///ditto
 bool resizeArray(bool runDestructors=true, T, F)(
 	return scope AllocatorInterface allocator, scope ref T[] array, size_t newLength, scope F onFail=null,
 )if(is(F == typeof(null)) || is(typeof(onFail()): bool)){
 	const oldLength = array.length;
 	if(newLength != oldLength){
 		if(array !is null){
-			static if(runDestructors){
+			static if(runDestructors && (is(T == struct) || is(T == class) || is(T == interface))){
 				if(newLength < oldLength){
 					foreach(ref item; array[newLength..$])
 						destroy!false(item);
@@ -351,7 +355,7 @@ bool resizeArray(bool runDestructors=true, T, F)(
 				auto allocResize = cast(AllocatorInterfaceWithResize)allocator;
 				if(unlikely(allocResize !is null)){
 					void[] voidArray = array;
-					doRealloc = allocator.resize(voidArray, arraySize) != arraySize;
+					doRealloc = allocResize.resize(voidArray, arraySize) != arraySize;
 					array = cast(T[])voidArray;
 				}
 			}
@@ -370,6 +374,7 @@ bool resizeArray(bool runDestructors=true, T, F)(
 	}
 	return true;
 }
+///
 pure unittest{
 	import std.exception;
 	import memterface.allocator;
@@ -393,21 +398,31 @@ Destroys `ptr` if `runDestructors` is `true`, and then deallocates it with `allo
 Similar to `dispose` from `std.experimental.allocator`.
 */
 void dispose(bool runDestructors=true, Allocator, T)(scope auto ref Allocator allocator, scope auto ref T* ptr)
-if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	static if(runDestructors)
-		destroy!false(ptr);
+if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (!is(T == class) && !is(T == interface))){
+	static if(runDestructors && is(T == struct))
+		destroy!false(*ptr);
 	allocator.deallocate((() @trusted => ptr[0..1])());
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
-///Ditto
-void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T* ptr){
-	static if(runDestructors)
-		destroy!false(ptr);
+///ditto
+void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T* ptr)
+if(!is(T == class) && !is(T == interface)){
+	static if(runDestructors && is(T == struct))
+		destroy!false(*ptr);
 	allocator.deallocate((() @trusted => ptr[0..1])());
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
+///
+nothrow @nogc pure unittest{
+	import memterface.allocator;
+	int* i = CAllocator().constructNew!int(5);
+	assert(*i == 5);
+	CAllocator().dispose(i);
+	assert(i is null);
+}
+
 
 /**
 Destroys `ptr` if `runDestructors` is `true`, and then deallocates it with `allocator`.
@@ -434,7 +449,7 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator && (is(T == class
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
-///Ditto
+///ditto
 void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T ptr)
 if(is(T == class) || is(T == interface)){
 	static if(is(T == interface))
@@ -450,6 +465,18 @@ if(is(T == class) || is(T == interface)){
 	static if(__traits(isRef, ptr))
 		ptr = null;
 }
+///
+nothrow @nogc pure unittest{
+	import memterface.allocator;
+	static class C{
+		int i;
+		this(int i) nothrow @nogc{ this.i = i; }
+	}
+	C c = CAllocator().constructNew!C(5);
+	assert(c.i == 5);
+	CAllocator().dispose(c);
+	assert(c is null);
+}
 
 /**
 Destroys `array` if `runDestructors` is `true`, and then deallocates it with `allocator`.
@@ -463,7 +490,7 @@ Similar to `dispose` from `std.experimental.allocator`.
 */
 void dispose(bool runDestructors=true, Allocator, T)(scope auto ref Allocator allocator, scope auto ref T[] array)
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	static if(runDestructors){
+	static if(runDestructors && (is(T == struct) || is(T == class) || is(T == interface))){
 		foreach(ref item; array)
 			destroy!false(item);
 	}
@@ -471,9 +498,9 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 	static if(__traits(isRef, array))
 		array = null;
 }
-///Ditto
+///ditto
 void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T[] array){
-	static if(runDestructors){
+	static if(runDestructors && (is(T == struct) || is(T == class) || is(T == interface))){
 		foreach(ref item; array)
 			destroy!false(item);
 	}
@@ -481,23 +508,9 @@ void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, sc
 	static if(__traits(isRef, array))
 		array = null;
 }
-
-nothrow unittest{
+///
+nothrow @nogc pure unittest{
 	import memterface.allocator;
-	static class C{
-		int i;
-		this(int i) nothrow{ this.i = i; }
-	}
-	C c = CAllocator().constructNew!C(5);
-	assert(c.i == 5);
-	CAllocator().dispose(c);
-	assert(c is null);
-	
-	int* i = CAllocator().constructNew!int(5);
-	assert(*i == 5);
-	CAllocator().dispose(i);
-	assert(i is null);
-	
 	int[] a = CAllocator().newArray!int(10);
 	assert(a.length == 10);
 	CAllocator().dispose(a);

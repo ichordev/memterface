@@ -102,7 +102,7 @@ struct KernelVirtualAllocator{
 				import core.sys.posix.unistd: _SC_PAGESIZE, sysconf;
 				const size_t pageSize = sysconf(_SC_PAGESIZE);
 				if((() @trusted => cast(size_t)memory.ptr)() % pageSize == 0){
-					version(mincore){
+					version(Mincore){
 						static ubyte[64] vec;
 						do{
 							const size = memory.length >= pageSize ? pageSize : memory.length;
@@ -233,15 +233,15 @@ private{
 	}else version(Posix){
 		version(linux){
 			import core.sys.linux.sys.mman: mincore;
-			version = mincore;
+			version = Mincore;
 			version = Supported_POSIX;
 		}else version(FreeBSD){
 			import core.sys.freebsd.sys.mman: mincore;
-			version = mincore;
+			version = Mincore;
 			version = Supported_POSIX;
 		}else version(NetBSD){
 			import core.sys.netbsd.sys.mman: mincore;
-			version = mincore;
+			version = Mincore;
 			version = Supported_POSIX;
 		}else version(OpenBSD){
 			import core.sys.openbsd.sys.mman: mquery;
