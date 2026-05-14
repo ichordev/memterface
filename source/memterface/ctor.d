@@ -318,8 +318,13 @@ bool resizeArray(bool runDestructors=true, Allocator, T, F)(
 			}
 			if(doRealloc){
 				auto newArray = ((memory) @trusted => cast(T[])memory)(allocator.allocate(arraySize));
-				foreach(i, ref item; array[0..min(newArray.length, $)])
-					moveEmplace(item, newArray[i]);
+				static if(is(immutable T == immutable void) || __traits(isScalar, T)){
+					const len = min(array.length, newArray.length);
+					newArray[0..len] = array[0..len];
+				}else{
+					foreach(i, ref item; array[0..min(newArray.length, $)])
+						moveEmplace(item, newArray[i]);
+				}
 				allocator.deallocate(array);
 				array = newArray;
 			}
