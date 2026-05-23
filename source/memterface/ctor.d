@@ -80,14 +80,14 @@ nothrow @nogc unittest{
 }
 
 private template sizeInMemory(T){
-	static if(is(T == class) || is(T == interface))
+	static if(is(T == super))
 		enum size_t sizeInMemory = __traits(classInstanceSize, T) + __traits(classInstanceAlignment, T);
 	else
 		enum size_t sizeInMemory = T.sizeof;
 }
 
 private template RefOf(T){
-	static if(is(T == class)){
+	static if(is(T == super)){
 		alias RefOf = T;
 	}else{
 		alias RefOf = T*;
@@ -96,7 +96,7 @@ private template RefOf(T){
 
 pragma(inline,true)
 private auto initNewImpl(T)(return scope void[] memory) nothrow @nogc pure @trusted{
-	static if(is(T == class)){
+	static if(is(T == super)){
 		memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
 		import core.stdc.string: memcpy;
 		memcpy(memory.ptr, __traits(initSymbol, T).ptr, __traits(classInstanceSize, T));
@@ -148,7 +148,7 @@ nothrow pure @safe unittest{
 pragma(inline,true)
 private auto constructNewImpl(alias doEmplace, T, Allocator)(return scope auto ref Allocator allocator){
 	auto memory = allocator.allocate(sizeInMemory!T);
-	static if(is(T == class)){
+	static if(is(T == super)){
 		memory = forceAlignment(memory, __traits(classInstanceAlignment, T));
 	}
 	scope(failure){
@@ -298,7 +298,7 @@ bool resizeArray(bool runDestructors=true, Allocator, T, F)(
 	const oldLength = array.length;
 	if(newLength != oldLength){
 		if(array !is null){
-			static if(runDestructors && (is(T == struct) || is(T == class) || is(T == interface))){
+			static if(runDestructors && (is(T == struct) || is(T == super))){
 				if(newLength < oldLength){
 					foreach(ref item; array[newLength..$])
 						destroy!false(item);
@@ -343,7 +343,7 @@ bool resizeArray(bool runDestructors=true, T, F)(
 	const oldLength = array.length;
 	if(newLength != oldLength){
 		if(array !is null){
-			static if(runDestructors && (is(T == struct) || is(T == class) || is(T == interface))){
+			static if(runDestructors && (is(T == struct) || is(T == super))){
 				if(newLength < oldLength){
 					foreach(ref item; array[newLength..$])
 						destroy!false(item);
@@ -495,7 +495,7 @@ Similar to `dispose` from `std.experimental.allocator`.
 */
 void dispose(bool runDestructors=true, Allocator, T)(scope auto ref Allocator allocator, scope auto ref T[] array)
 if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
-	static if(runDestructors && (is(T == struct) || is(T == class) || is(T == interface))){
+	static if(runDestructors && (is(T == struct) || is(T == super))){
 		foreach(ref item; array)
 			destroy!false(item);
 	}
@@ -505,7 +505,7 @@ if(!is(Allocator: AllocatorInterface) && isAllocator!Allocator){
 }
 ///ditto
 void dispose(bool runDestructors=true, T)(scope AllocatorInterface allocator, scope auto ref T[] array){
-	static if(runDestructors && (is(T == struct) || is(T == class) || is(T == interface))){
+	static if(runDestructors && (is(T == struct) || is(T == super))){
 		foreach(ref item; array)
 			destroy!false(item);
 	}
