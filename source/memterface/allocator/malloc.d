@@ -62,7 +62,7 @@ struct CAllocator{
 		*/
 		static bool isOwnerOf(const(void)[] memory) nothrow @nogc pure @safe{
 			if(memory.length > 0){
-				version(Apple){
+				version(REAL_Apple){
 					return (() @trusted => malloc_size(memory.ptr))() >= memory.length;
 				}else version(linux){
 					return (() @trusted => malloc_usable_size(cast(void*)memory.ptr))() >= memory.length;
@@ -96,13 +96,20 @@ struct CAllocator{
 static assert(isAllocator!CAllocator);
 static assert(hasReallocate!CAllocator);
 
+//`version(Apple)` is currently only defined on macOS... -_-
+version(Apple) version = REAL_Apple;
+else version(iOS) version = REAL_Apple;
+else version(TVOS) version = REAL_Apple;
+else version(WatchOS) version = REAL_Apple;
+else version(VisionOS) version = REAL_Apple;
+
 private{
-	version(Apple){
+	version(REAL_Apple){
 		//from <malloc/malloc.h>
 		extern(C) size_t malloc_size(const(void)* ptr) nothrow @nogc pure @system;
 		
 		version = NativeIsOwnerOf;
-	}version(linux){
+	}else version(linux){
 		//from <malloc.h>
 		size_t malloc_usable_size(void* ptr) nothrow @nogc pure @system;
 		
