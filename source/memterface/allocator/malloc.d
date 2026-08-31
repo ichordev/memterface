@@ -111,12 +111,12 @@ private{
 		version = NativeIsOwnerOf;
 	}else version(linux){
 		//from <malloc.h>
-		size_t malloc_usable_size(void* ptr) nothrow @nogc pure @system;
+		extern(C) size_t malloc_usable_size(void* ptr) nothrow @nogc pure @system;
 		
 		version = NativeIsOwnerOf;
 	}else version(FreeBSD){
 		//from <malloc_np.h>
-		size_t malloc_usable_size(const(void)* ptr) nothrow @nogc pure @system;
+		extern(C) size_t malloc_usable_size(const(void)* ptr) nothrow @nogc pure @system;
 		
 		version = NativeIsOwnerOf;
 	}else version(Windows){
